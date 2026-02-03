@@ -726,4 +726,55 @@ impl App {
         self.set_status("Killed all managed processes");
         Ok(())
     }
+
+    /// Startup recovery: cleanup dead processes and discover orphans
+    pub fn startup_recovery(&mut self) {
+        // Cleanup dead processes from registry
+        if let Some(ref mut registry) = self.process_registry {
+            match registry.cleanup_dead_processes() {
+                Ok(dead) => {
+                    if !dead.is_empty() {
+                        self.set_status(&format!("Cleaned up {} dead processes", dead.len()));
+                    }
+                }
+                Err(e) => {
+                    self.set_error(&format!("Failed to cleanup: {e}"));
+                }
+            }
+        }
+
+        // Discover orphan sessions
+        if let Some(ref registry) = self.process_registry {
+            let registered_pids: std::collections::HashSet<u32> =
+                registry.get_all_processes().iter().map(|p| p.pid).collect();
+
+            match crate::process::adoption::discover_orphan_sessions(&registered_pids) {
+                Ok(orphans) => {
+                    if !orphans.is_empty() {
+                        self.set_status(&format!("Found {} orphan sessions", orphans.len()));
+                    }
+                }
+                Err(e) => {
+                    // Don't show error for orphan discovery - it's optional
+                    let _ = e;
+                }
+            }
+        }
+    }
+
+    /// Get count of managed processes
+    pub fn managed_process_count(&self) -> usize {
+        self.process_registry
+            .as_ref()
+            .map(|r| r.get_all_processes().len())
+            .unwrap_or(0)
+    }
+
+    /// Graceful shutdown - save state but don't kill processes
+    pub fn graceful_shutdown(&mut self) {
+        // Save registry to disk (processes keep running)
+        if let Some(ref registry) = self.process_registry {
+            let _ = registry.save();
+        }
+    }
 }

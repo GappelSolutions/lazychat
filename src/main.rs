@@ -49,7 +49,13 @@ async fn main() -> Result<()> {
     let _ = app.load_presets();
     let _ = app.load_process_registry();
 
+    // Startup recovery: cleanup dead processes, discover orphans
+    app.startup_recovery();
+
     let result = events::run_app(&mut terminal, &mut app).await;
+
+    // Graceful shutdown - save state, processes keep running
+    app.graceful_shutdown();
 
     // Restore terminal
     disable_raw_mode()?;

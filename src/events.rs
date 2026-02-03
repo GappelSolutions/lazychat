@@ -146,6 +146,13 @@ async fn handle_key(app: &mut App, key: KeyEvent) -> Result<bool> {
             }
         }
 
+        // Quit AND kill all processes (Shift+Q)
+        KeyCode::Char('Q') => {
+            let _ = app.kill_all_processes();
+            app.should_quit = true;
+            return Ok(true);
+        }
+
         // Quit
         KeyCode::Char('q') => {
             app.should_quit = true;
