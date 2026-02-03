@@ -1,0 +1,50 @@
+[package]
+name = "lazychat"
+version = "0.1.0"
+edition = "2021"
+description = "A TUI for AI coding assistants - Claude Code, Codex, opencode, and more"
+authors = ["Christian Gappel"]
+
+[dependencies]
+# TUI framework
+ratatui = "0.29"
+crossterm = "0.28"
+
+# Async runtime
+tokio = { version = "1", features = ["full"] }
+
+# Data parsing
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# File watching
+notify = "7"
+
+# Time handling
+chrono = { version = "0.4", features = ["serde"] }
+
+# Directories
+dirs = "5"
+
+# Error handling
+anyhow = "1"
+thiserror = "2"
+
+# CLI arguments
+clap = { version = "4", features = ["derive"] }
+
+# Logging (optional, for debug)
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Embedded terminal (PTY)
+portable-pty = "0.8"
+vt100 = "0.15"
+
+# Diff computation
+similar = "2"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true
