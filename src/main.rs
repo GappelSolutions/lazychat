@@ -1,6 +1,7 @@
 mod app;
 mod data;
 mod events;
+mod process;
 mod terminal;
 mod ui;
 
