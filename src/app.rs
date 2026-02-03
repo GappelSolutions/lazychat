@@ -640,4 +640,90 @@ impl App {
             self.selected_preset_idx -= 1;
         }
     }
+
+    /// Spawn all instances for the selected preset
+    pub fn spawn_preset(&mut self) -> Result<()> {
+        let Some(preset) = self.selected_preset().cloned() else {
+            self.set_error("No preset selected");
+            return Ok(());
+        };
+
+        if self.process_registry.is_none() {
+            self.set_error("Process registry not loaded");
+            return Ok(());
+        }
+
+        // Spawn instances
+        for i in 0..preset.instances {
+            match crate::process::headless::HeadlessTerminal::spawn(
+                &preset.cwd,
+                preset.add_dirs.clone(),
+                Some(&preset.name),
+            ) {
+                Ok(terminal) => {
+                    let pid = terminal.pid();
+                    let session_id = terminal.session_id().to_string();
+
+                    // Register in process registry
+                    if let Some(ref mut registry) = self.process_registry {
+                        if let Err(e) = registry.register_process(
+                            pid,
+                            session_id,
+                            Some(preset.name.clone()),
+                            i,
+                            preset.cwd.clone(),
+                            preset.add_dirs.clone(),
+                        ) {
+                            self.set_error(&format!("Failed to register process: {e}"));
+                        }
+                    }
+                }
+                Err(e) => {
+                    self.set_error(&format!("Failed to spawn instance {}: {e}", i + 1));
+                    return Ok(());
+                }
+            }
+        }
+
+        self.set_status(&format!("Spawned {} instances for {}", preset.instances, preset.name));
+        Ok(())
+    }
+
+    /// Kill a managed process by PID
+    pub fn kill_process(&mut self, pid: u32) -> Result<()> {
+        use nix::sys::signal::{kill, Signal};
+        use nix::unistd::Pid;
+
+        // Send SIGTERM
+        if let Err(e) = kill(Pid::from_raw(pid as i32), Signal::SIGTERM) {
+            if e != nix::errno::Errno::ESRCH {
+                self.set_error(&format!("Failed to kill process: {e}"));
+                return Ok(());
+            }
+        }
+
+        // Unregister from registry
+        if let Some(ref mut registry) = self.process_registry {
+            let _ = registry.unregister_process(pid);
+        }
+
+        self.set_status(&format!("Killed process {pid}"));
+        Ok(())
+    }
+
+    /// Kill all managed processes
+    pub fn kill_all_processes(&mut self) -> Result<()> {
+        let Some(ref mut registry) = self.process_registry else {
+            return Ok(());
+        };
+
+        let pids: Vec<u32> = registry.get_all_processes().iter().map(|p| p.pid).collect();
+
+        for pid in pids {
+            let _ = self.kill_process(pid);
+        }
+
+        self.set_status("Killed all managed processes");
+        Ok(())
+    }
 }

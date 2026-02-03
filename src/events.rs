@@ -245,7 +245,22 @@ async fn handle_key(app: &mut App, key: KeyEvent) -> Result<bool> {
                 }
             }
         }
-        KeyCode::PageDown | KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+        KeyCode::PageDown => {
+            if app.diff_mode || app.focus == Focus::Files {
+                // Diff view: scroll_up moves view down (towards bottom)
+                for _ in 0..10 {
+                    app.scroll_up();
+                }
+            } else {
+                // Chat view: scroll_down moves view down (towards newer messages)
+                for _ in 0..10 {
+                    app.scroll_down();
+                }
+            }
+        }
+
+        // Ctrl+D = page down OR kill all processes
+        KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
             if app.diff_mode || app.focus == Focus::Files {
                 // Diff view: scroll_up moves view down (towards bottom)
                 for _ in 0..10 {
@@ -339,11 +354,21 @@ async fn handle_key(app: &mut App, key: KeyEvent) -> Result<bool> {
             }
         }
 
-        // New session
-        KeyCode::Char('n') => match app.open_new_embedded_terminal(80, 24) {
-            Ok(_) => app.set_status("Starting new Claude... (Ctrl+q to exit)"),
-            Err(e) => app.set_error(&format!("Failed: {}", e)),
-        },
+        // New session OR spawn preset
+        KeyCode::Char('n') => {
+            if app.focus == Focus::Presets {
+                // Spawn instances from selected preset
+                if let Err(e) = app.spawn_preset() {
+                    app.set_error(&format!("Failed to spawn preset: {e}"));
+                }
+            } else {
+                // Existing new session logic
+                match app.open_new_embedded_terminal(80, 24) {
+                    Ok(_) => app.set_status("Starting new Claude... (Ctrl+q to exit)"),
+                    Err(e) => app.set_error(&format!("Failed: {}", e)),
+                }
+            }
+        }
 
         // Ctrl+F = exit fullscreen (Enter to enter)
         KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -401,6 +426,22 @@ async fn handle_key(app: &mut App, key: KeyEvent) -> Result<bool> {
                     Ok(_) => app.set_status("Opening editor... (Ctrl+q to exit)"),
                     Err(e) => app.set_error(&format!("Failed: {e}")),
                 }
+            }
+        }
+
+        // Kill process (d)
+        KeyCode::Char('d') => {
+            if app.focus == Focus::Sessions {
+                // TODO: Add confirmation dialog
+                // For now, just show message that kill is not yet implemented for sessions
+                app.set_status("Kill process: select from process list (coming in Phase 5)");
+            }
+        }
+
+        // Kill all processes (D)
+        KeyCode::Char('D') => {
+            if let Err(e) = app.kill_all_processes() {
+                app.set_error(&format!("Failed: {e}"));
             }
         }
 
