@@ -47,7 +47,10 @@ mod headless_validation_tests {
         assert!(result.is_err(), "Should reject ../ traversal");
 
         let err = result.unwrap_err().to_string();
-        assert!(err.contains("Path traversal not allowed"), "Error message should mention path traversal");
+        assert!(
+            err.contains("Path traversal not allowed"),
+            "Error message should mention path traversal"
+        );
     }
 
     #[test]
@@ -74,7 +77,10 @@ mod headless_validation_tests {
         assert!(result.is_err(), "Should reject shell metacharacters");
 
         let err = result.unwrap_err().to_string();
-        assert!(err.contains("Invalid preset name"), "Error should mention invalid preset name");
+        assert!(
+            err.contains("Invalid preset name"),
+            "Error should mention invalid preset name"
+        );
     }
 
     #[test]
@@ -95,7 +101,10 @@ mod headless_validation_tests {
     #[test]
     fn test_validate_preset_name_accepts_alphanumeric() {
         let result = validate_preset_name("my-preset_123");
-        assert!(result.is_ok(), "Should accept alphanumeric with dash and underscore");
+        assert!(
+            result.is_ok(),
+            "Should accept alphanumeric with dash and underscore"
+        );
     }
 
     #[test]
@@ -136,18 +145,16 @@ mod registry_tests {
 
         // Create test data
         let data = RegistryData {
-            processes: vec![
-                ManagedProcess {
-                    pid: 12345,
-                    session_id: "test-session-1".to_string(),
-                    preset_name: Some("default".to_string()),
-                    instance_index: 1,
-                    cwd: "/tmp/test".to_string(),
-                    add_dirs: vec!["/tmp/extra".to_string()],
-                    started_at: Utc::now(),
-                    status: "running".to_string(),
-                },
-            ],
+            processes: vec![ManagedProcess {
+                pid: 12345,
+                session_id: "test-session-1".to_string(),
+                preset_name: Some("default".to_string()),
+                instance_index: 1,
+                cwd: "/tmp/test".to_string(),
+                add_dirs: vec!["/tmp/extra".to_string()],
+                started_at: Utc::now(),
+                status: "running".to_string(),
+            }],
         };
 
         // Write to file
@@ -167,7 +174,10 @@ mod registry_tests {
             read_data.processes[0].session_id, "test-session-1",
             "Session ID should match"
         );
-        assert_eq!(read_data.processes[0].status, "running", "Status should be running");
+        assert_eq!(
+            read_data.processes[0].status, "running",
+            "Status should be running"
+        );
 
         Ok(())
     }
@@ -210,8 +220,15 @@ mod registry_tests {
 
         // Test unregister_process (remove)
         data.processes.retain(|p| p.pid != 100);
-        assert_eq!(data.processes.len(), 1, "Should have 1 process after remove");
-        assert_eq!(data.processes[0].pid, 200, "Remaining process should be PID 200");
+        assert_eq!(
+            data.processes.len(),
+            1,
+            "Should have 1 process after remove"
+        );
+        assert_eq!(
+            data.processes[0].pid, 200,
+            "Remaining process should be PID 200"
+        );
 
         // Test get_all_processes
         let all = &data.processes;
@@ -409,7 +426,10 @@ mod adoption_tests {
             }
         }
 
-        assert_eq!(orphan_count, 3, "Should find 3 orphan sessions (active, idle, working)");
+        assert_eq!(
+            orphan_count, 3,
+            "Should find 3 orphan sessions (active, idle, working)"
+        );
 
         Ok(())
     }

@@ -1,4 +1,5 @@
 mod app;
+mod config;
 mod data;
 mod events;
 mod process;

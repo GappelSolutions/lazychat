@@ -49,8 +49,21 @@ sysinfo = "0.30"
 nix = { version = "0.27", features = ["signal", "process"] }
 uuid = { version = "1", features = ["v4"] }
 
+# Configuration
+toml = "0.8"
+fuzzy-matcher = "0.3"
+
+[lib]
+name = "lazychat"
+path = "src/lib.rs"
+
+[[bin]]
+name = "lazychat"
+path = "src/main.rs"
+
 [dev-dependencies]
 tempfile = "3"
+serial_test = "3"
 
 [profile.release]
 lto = true
