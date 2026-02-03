@@ -1,7 +1,6 @@
-use super::{Agent, ChatMessage, DailyStats, FileChange, Session, Task, TodoItem, ToolCall};
+use super::{Agent, ChatMessage, Session, TodoItem, ToolCall};
 use anyhow::Result;
 use chrono::{DateTime, Utc};
-use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -10,25 +9,6 @@ use tokio::fs;
 pub struct ClaudeData {
     pub sessions: Vec<Session>,
     pub agents: Vec<Agent>,
-    pub tasks: Vec<Task>,
-    pub daily_stats: Vec<DailyStats>,
-}
-
-#[derive(Debug, Deserialize)]
-struct StatsCache {
-    #[serde(rename = "dailyActivity")]
-    daily_activity: Option<Vec<DailyActivityEntry>>,
-}
-
-#[derive(Debug, Deserialize)]
-struct DailyActivityEntry {
-    date: String,
-    #[serde(rename = "messageCount")]
-    message_count: u64,
-    #[serde(rename = "sessionCount")]
-    session_count: u64,
-    #[serde(rename = "toolCallCount")]
-    tool_call_count: u64,
 }
 
 impl ClaudeData {
@@ -41,17 +21,148 @@ impl ClaudeData {
     pub async fn load() -> Result<Self> {
         let claude_dir = Self::claude_dir();
 
-        let sessions = Self::load_sessions(&claude_dir).await?;
+        let mut sessions = Self::load_sessions(&claude_dir).await?;
         let agents = Self::load_agents(&claude_dir).await?;
-        let tasks = Self::load_tasks(&claude_dir).await?;
-        let daily_stats = Self::load_stats(&claude_dir).await?;
+
+        // Load history to get first user messages as descriptions
+        let history = Self::load_history(&claude_dir).await.unwrap_or_default();
+
+        // Load tasks from ~/.claude/tasks/{sessionId}/*.json
+        let tasks_by_session = Self::load_tasks_by_session(&claude_dir).await.unwrap_or_default();
+
+        // Populate todos and descriptions into each session
+        for session in &mut sessions {
+            // Add todos from agents (old system: ~/.claude/todos/)
+            let mut session_todos: Vec<TodoItem> = agents
+                .iter()
+                .filter(|a| a.session_id == session.id)
+                .flat_map(|a| a.todos.clone())
+                .collect();
+
+            // Add tasks (new system: ~/.claude/tasks/)
+            if let Some(tasks) = tasks_by_session.get(&session.id) {
+                session_todos.extend(tasks.clone());
+            }
+
+            session.todos = session_todos;
+
+            // Add description from history (first user message)
+            if let Some(desc) = history.get(&session.id) {
+                session.description = Some(desc.clone());
+            }
+        }
 
         Ok(Self {
             sessions,
             agents,
-            tasks,
-            daily_stats,
         })
+    }
+
+    /// Load tasks from ~/.claude/tasks/{sessionId}/*.json
+    async fn load_tasks_by_session(claude_dir: &PathBuf) -> Result<HashMap<String, Vec<TodoItem>>> {
+        let tasks_dir = claude_dir.join("tasks");
+        let mut tasks_map: HashMap<String, Vec<TodoItem>> = HashMap::new();
+
+        if !tasks_dir.exists() {
+            return Ok(tasks_map);
+        }
+
+        let mut dir_entries = fs::read_dir(&tasks_dir).await?;
+
+        while let Some(entry) = dir_entries.next_entry().await? {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+
+            let session_id = path
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("")
+                .to_string();
+
+            let mut tasks = Vec::new();
+
+            // Read all .json files in the session's tasks directory
+            let mut task_files = fs::read_dir(&path).await?;
+            while let Some(task_entry) = task_files.next_entry().await? {
+                let task_path = task_entry.path();
+                if task_path.extension().and_then(|e| e.to_str()) != Some("json") {
+                    continue;
+                }
+
+                if let Ok(content) = fs::read_to_string(&task_path).await {
+                    if let Ok(task_data) = serde_json::from_str::<Value>(&content) {
+                        let subject = task_data.get("subject")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        let status = task_data.get("status")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("pending")
+                            .to_string();
+                        let id = task_data.get("id")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("")
+                            .to_string();
+
+                        if !subject.is_empty() {
+                            tasks.push(TodoItem {
+                                id,
+                                content: subject,
+                                status,
+                            });
+                        }
+                    }
+                }
+            }
+
+            if !tasks.is_empty() {
+                tasks_map.insert(session_id, tasks);
+            }
+        }
+
+        Ok(tasks_map)
+    }
+
+    /// Load history.jsonl to extract first user messages per session
+    async fn load_history(claude_dir: &PathBuf) -> Result<HashMap<String, String>> {
+        let history_file = claude_dir.join("history.jsonl");
+        let mut descriptions: HashMap<String, String> = HashMap::new();
+
+        if !history_file.exists() {
+            return Ok(descriptions);
+        }
+
+        let content = fs::read_to_string(&history_file).await?;
+
+        for line in content.lines() {
+            if let Ok(json) = serde_json::from_str::<Value>(line) {
+                let session_id = json.get("sessionId")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+
+                // Skip if we already have a description for this session
+                if descriptions.contains_key(&session_id) {
+                    continue;
+                }
+
+                if let Some(display) = json.get("display").and_then(|v| v.as_str()) {
+                    // Skip commands (start with /)
+                    if display.starts_with('/') || display.starts_with('<') {
+                        continue;
+                    }
+                    // Skip very short messages
+                    if display.len() < 5 {
+                        continue;
+                    }
+                    descriptions.insert(session_id, display.to_string());
+                }
+            }
+        }
+
+        Ok(descriptions)
     }
 
     /// Load chat messages from a session's transcript file
@@ -114,8 +225,6 @@ impl ClaudeData {
                                     content,
                                     timestamp,
                                     tool_calls: Vec::new(),
-                                    file_changes: Vec::new(),
-                                    is_thinking: false,
                                 });
                             }
                         }
@@ -124,8 +233,6 @@ impl ClaudeData {
                         if let Some(msg) = json.get("message") {
                             let mut content = String::new();
                             let mut tool_calls = Vec::new();
-                            let mut file_changes = Vec::new();
-                            let mut is_thinking = false;
 
                             if let Some(content_array) = msg.get("content").and_then(|c| c.as_array()) {
                                 for block in content_array {
@@ -141,8 +248,6 @@ impl ClaudeData {
                                             }
                                         }
                                         "thinking" => {
-                                            is_thinking = true;
-                                            // Optionally include thinking content
                                             if let Some(thinking) = block.get("thinking").and_then(|t| t.as_str()) {
                                                 if !content.is_empty() {
                                                     content.push('\n');
@@ -156,60 +261,21 @@ impl ClaudeData {
                                                 .and_then(|n| n.as_str())
                                                 .unwrap_or("unknown")
                                                 .to_string();
-                                            let tool_id = block.get("id")
-                                                .and_then(|i| i.as_str())
-                                                .unwrap_or("")
-                                                .to_string();
 
-                                            // Extract file changes from Edit/Write tools
-                                            if let Some(input) = block.get("input") {
-                                                if tool_name == "Edit" {
-                                                    let file_path = input.get("file_path")
-                                                        .and_then(|p| p.as_str())
-                                                        .unwrap_or("")
-                                                        .to_string();
-                                                    let old_content = input.get("old_string")
-                                                        .and_then(|s| s.as_str())
-                                                        .unwrap_or("")
-                                                        .to_string();
-                                                    let new_content = input.get("new_string")
-                                                        .and_then(|s| s.as_str())
-                                                        .unwrap_or("")
-                                                        .to_string();
-
-                                                    if !file_path.is_empty() {
-                                                        file_changes.push(FileChange {
-                                                            file_path,
-                                                            old_content,
-                                                            new_content,
-                                                            tool_id: tool_id.clone(),
-                                                        });
-                                                    }
-                                                } else if tool_name == "Write" {
-                                                    let file_path = input.get("file_path")
-                                                        .and_then(|p| p.as_str())
-                                                        .unwrap_or("")
-                                                        .to_string();
-                                                    let new_content = input.get("content")
-                                                        .and_then(|s| s.as_str())
-                                                        .unwrap_or("")
-                                                        .to_string();
-
-                                                    if !file_path.is_empty() {
-                                                        file_changes.push(FileChange {
-                                                            file_path,
-                                                            old_content: String::new(), // Write creates new file
-                                                            new_content,
-                                                            tool_id: tool_id.clone(),
-                                                        });
-                                                    }
-                                                }
-                                            }
+                                            // Extract file_path from Edit/Write tool inputs
+                                            let file_path = if tool_name == "Edit" || tool_name == "Write" {
+                                                block.get("input")
+                                                    .and_then(|i| i.get("file_path"))
+                                                    .and_then(|p| p.as_str())
+                                                    .map(|s| s.to_string())
+                                            } else {
+                                                None
+                                            };
 
                                             tool_calls.push(ToolCall {
                                                 tool_name,
                                                 status: "completed".to_string(),
-                                                result_preview: None,
+                                                file_path,
                                             });
                                         }
                                         _ => {}
@@ -232,8 +298,6 @@ impl ClaudeData {
                                     },
                                     timestamp,
                                     tool_calls,
-                                    file_changes,
-                                    is_thinking,
                                 });
                             }
                         }
@@ -282,41 +346,48 @@ impl ClaudeData {
                     .unwrap_or("unknown")
                     .to_string();
 
-                // Get file metadata for timestamps
+                // Get file metadata for timestamps and size
                 let metadata = fs::metadata(&file_path).await?;
                 let modified = metadata.modified().ok().map(DateTime::<Utc>::from);
+                let file_size = metadata.len();
 
-                // Count messages (lines in jsonl)
-                let content = fs::read_to_string(&file_path).await.unwrap_or_default();
-                let message_count = content.lines().count() as u64;
+                // Estimate message count from file size (avg ~500 bytes per line)
+                let message_count = (file_size / 500).max(1);
 
-                // Extract first user message as a preview
-                let mut status = "idle".to_string();
-                for line in content.lines().take(10) {
-                    if let Ok(json) = serde_json::from_str::<Value>(line) {
-                        if json.get("type").and_then(|v| v.as_str()) == Some("user") {
-                            // Check if it's recent (within last 5 minutes)
-                            if let Some(ts) = json.get("timestamp").and_then(|t| t.as_str()) {
-                                if let Ok(dt) = DateTime::parse_from_rfc3339(ts) {
-                                    let age = Utc::now().signed_duration_since(dt.with_timezone(&Utc));
-                                    if age.num_minutes() < 5 {
-                                        status = "active".to_string();
-                                    }
-                                }
-                            }
-                            break;
-                        }
-                    }
-                }
+                // Check for state file first (written by Claude hooks)
+                // Then fall back to file modification time
+                let state_file = claude_dir.join("session-state").join(format!("{}.state", &session_id));
+                let status = if state_file.exists() {
+                    // Read state from hook-written file
+                    std::fs::read_to_string(&state_file)
+                        .map(|s| s.trim().to_string())
+                        .unwrap_or_else(|_| "idle".to_string())
+                } else if let Some(mod_time) = &modified {
+                    // Fall back to time-based detection
+                    // working = < 10 sec (actively processing)
+                    // active = < 2 min (recent activity)
+                    // idle = 2-30 min (waiting)
+                    // inactive = > 30 min (old)
+                    let age = chrono::Utc::now().signed_duration_since(*mod_time);
+                    if age.num_seconds() < 10 { "working".to_string() }
+                    else if age.num_seconds() < 120 { "active".to_string() }
+                    else if age.num_minutes() < 30 { "idle".to_string() }
+                    else { "inactive".to_string() }
+                } else {
+                    "inactive".to_string()
+                };
 
                 sessions.push(Session {
                     id: session_id,
                     project: project_name.clone(),
                     project_name: project_name.split('/').last().unwrap_or(&project_name).to_string(),
+                    description: None, // Will be populated from history.jsonl
+                    custom_name: None,
                     started_at: modified,
                     last_activity: modified,
                     message_count,
                     status,
+                    todos: Vec::new(), // Will be populated after loading all sessions
                     file_path: Some(file_path),
                 });
             }
@@ -410,88 +481,4 @@ impl ClaudeData {
         Ok(agents)
     }
 
-    async fn load_tasks(claude_dir: &PathBuf) -> Result<Vec<Task>> {
-        let tasks_dir = claude_dir.join("tasks");
-        let mut tasks = Vec::new();
-
-        if !tasks_dir.exists() {
-            return Ok(tasks);
-        }
-
-        let mut dir_entries = fs::read_dir(&tasks_dir).await?;
-
-        while let Some(entry) = dir_entries.next_entry().await? {
-            let path = entry.path();
-            if !path.is_dir() {
-                continue;
-            }
-
-            let task_id = path
-                .file_name()
-                .and_then(|n| n.to_str())
-                .unwrap_or("unknown")
-                .to_string();
-
-            // Try to read task.json or similar
-            let task_file = path.join("task.json");
-            if task_file.exists() {
-                if let Ok(content) = fs::read_to_string(&task_file).await {
-                    if let Ok(task_data) = serde_json::from_str::<Value>(&content) {
-                        tasks.push(Task {
-                            id: task_id.clone(),
-                            subject: task_data.get("subject")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("Untitled")
-                                .to_string(),
-                            description: task_data.get("description")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("")
-                                .to_string(),
-                            status: task_data.get("status")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("pending")
-                                .to_string(),
-                            agent_id: task_data.get("agent_id")
-                                .and_then(|v| v.as_str())
-                                .map(|s| s.to_string()),
-                            created_at: None,
-                        });
-                        continue;
-                    }
-                }
-            }
-
-            // Fallback: create basic task entry
-            tasks.push(Task {
-                id: task_id.clone(),
-                subject: format!("Task {}", task_id.chars().take(8).collect::<String>()),
-                description: String::new(),
-                status: "unknown".to_string(),
-                agent_id: None,
-                created_at: None,
-            });
-        }
-
-        Ok(tasks)
-    }
-
-    async fn load_stats(claude_dir: &PathBuf) -> Result<Vec<DailyStats>> {
-        let stats_file = claude_dir.join("stats-cache.json");
-
-        if !stats_file.exists() {
-            return Ok(Vec::new());
-        }
-
-        let content = fs::read_to_string(&stats_file).await?;
-        let cache: StatsCache = serde_json::from_str(&content)?;
-
-        Ok(cache.daily_activity.unwrap_or_default().into_iter().map(|entry| {
-            DailyStats {
-                date: entry.date,
-                message_count: entry.message_count,
-                session_count: entry.session_count,
-                tool_call_count: entry.tool_call_count,
-            }
-        }).collect())
-    }
 }

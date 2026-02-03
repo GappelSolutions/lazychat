@@ -1,84 +1,29 @@
-use crate::data::{claude::ClaudeData, Session, Task, Agent, DailyStats, ChatMessage};
+use crate::data::{claude::ClaudeData, Session, Agent, ChatMessage, FileChange, FileStatus};
 use crate::terminal::EmbeddedTerminal;
 use anyhow::Result;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum Tab {
-    Sessions,
-    Dashboard,
-    Agents,
-    Tasks,
-    Stats,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum InputMode {
-    Normal,
-    Input,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Focus {
-    List,
+    Sessions,
+    Todos,
+    Files,
     Detail,
-}
-
-impl Tab {
-    pub fn all() -> Vec<Tab> {
-        vec![Tab::Sessions, Tab::Dashboard, Tab::Agents, Tab::Tasks, Tab::Stats]
-    }
-
-    pub fn title(&self) -> &'static str {
-        match self {
-            Tab::Sessions => "Sessions",
-            Tab::Dashboard => "Dashboard",
-            Tab::Agents => "Agents",
-            Tab::Tasks => "Tasks",
-            Tab::Stats => "Stats",
-        }
-    }
-
-    pub fn next(&self) -> Tab {
-        match self {
-            Tab::Sessions => Tab::Dashboard,
-            Tab::Dashboard => Tab::Agents,
-            Tab::Agents => Tab::Tasks,
-            Tab::Tasks => Tab::Stats,
-            Tab::Stats => Tab::Sessions,
-        }
-    }
-
-    pub fn prev(&self) -> Tab {
-        match self {
-            Tab::Sessions => Tab::Stats,
-            Tab::Dashboard => Tab::Sessions,
-            Tab::Agents => Tab::Dashboard,
-            Tab::Tasks => Tab::Agents,
-            Tab::Stats => Tab::Tasks,
-        }
-    }
 }
 
 pub struct App {
     pub should_quit: bool,
-    pub current_tab: Tab,
-    pub refresh_rate: u64,
     pub show_help: bool,
 
     // Status message (shows temporarily)
     pub status_message: Option<String>,
     pub status_is_error: bool,
 
-    // Input
-    pub input_mode: InputMode,
-    pub input_buffer: String,
+    // Focus
     pub focus: Focus,
 
     // Data
     pub sessions: Vec<Session>,
     pub agents: Vec<Agent>,
-    pub tasks: Vec<Task>,
-    pub daily_stats: Vec<DailyStats>,
 
     // Chat messages for selected session
     pub current_messages: Vec<ChatMessage>,
@@ -86,68 +31,74 @@ pub struct App {
 
     // Selection state
     pub session_list_state: ratatui::widgets::ListState,
-    pub agent_list_state: ratatui::widgets::ListState,
-    pub task_list_state: ratatui::widgets::ListState,
 
     // Scroll state for chat view
     pub chat_scroll: u16,
     pub chat_scroll_max: u16,
 
-    // Diff view state
-    pub show_diff_view: bool,
-    pub diff_inline_view: bool,  // Full-screen single file diff
-    pub diff_scroll: u16,
-    pub diff_scroll_max: u16,
-    pub selected_diff_idx: usize,
+    // Scroll state for todos panel
+    pub todos_scroll: u16,
+    pub todos_scroll_max: u16,
+
+    // Scroll state for files panel
+    pub files_scroll: u16,
+    pub files_scroll_max: u16,
+
+    // Edited files for current session (with git info)
+    pub current_file_changes: Vec<FileChange>,
+    pub selected_file_idx: usize,
+    pub current_diff: String,
+    pub diff_mode: bool,  // True when viewing diff in detail pane
+    pub fullscreen: bool, // True when detail view is fullscreen
+
+    // Rename input
+    pub renaming: bool,
+    pub rename_buffer: String,
+
+    // File filter
+    pub file_filter_active: bool,
+    pub file_filter: String,
+    pub file_tree_mode: bool,  // Toggle between flat list and tree view
 
     // Embedded terminal for Claude sessions
     pub embedded_terminal: Option<EmbeddedTerminal>,
     pub terminal_mode: bool,
-
-    // Expanded agent (for tree view)
-    pub expanded_agents: std::collections::HashSet<String>,
 }
 
 impl App {
-    pub fn new(refresh_rate: u64) -> Self {
+    pub fn new() -> Self {
         let mut session_list_state = ratatui::widgets::ListState::default();
         session_list_state.select(Some(0));
 
-        let mut agent_list_state = ratatui::widgets::ListState::default();
-        agent_list_state.select(Some(0));
-
-        let mut task_list_state = ratatui::widgets::ListState::default();
-        task_list_state.select(Some(0));
-
         Self {
             should_quit: false,
-            current_tab: Tab::Sessions,
-            refresh_rate,
             show_help: false,
             status_message: None,
             status_is_error: false,
-            input_mode: InputMode::Normal,
-            input_buffer: String::new(),
-            focus: Focus::List,
+            focus: Focus::Sessions,
             sessions: Vec::new(),
             agents: Vec::new(),
-            tasks: Vec::new(),
-            daily_stats: Vec::new(),
             current_messages: Vec::new(),
             messages_loading: false,
             session_list_state,
-            agent_list_state,
-            task_list_state,
             chat_scroll: 0,
             chat_scroll_max: 0,
-            show_diff_view: false,
-            diff_inline_view: false,
-            diff_scroll: 0,
-            diff_scroll_max: 0,
-            selected_diff_idx: 0,
+            todos_scroll: 0,
+            todos_scroll_max: 0,
+            files_scroll: 0,
+            files_scroll_max: 0,
+            current_file_changes: Vec::new(),
+            selected_file_idx: 0,
+            current_diff: String::new(),
+            diff_mode: false,
+            fullscreen: false,
+            renaming: false,
+            rename_buffer: String::new(),
+            file_filter_active: false,
+            file_filter: String::new(),
+            file_tree_mode: true,  // Default to tree view
             embedded_terminal: None,
             terminal_mode: false,
-            expanded_agents: std::collections::HashSet::new(),
         }
     }
 
@@ -155,8 +106,6 @@ impl App {
         let data = ClaudeData::load().await?;
         self.sessions = data.sessions;
         self.agents = data.agents;
-        self.tasks = data.tasks;
-        self.daily_stats = data.daily_stats;
         Ok(())
     }
 
@@ -166,40 +115,129 @@ impl App {
                 self.messages_loading = true;
                 self.current_messages = ClaudeData::load_session_messages(session).await?;
                 self.messages_loading = false;
-                // Scroll to bottom
                 self.chat_scroll = 0;
+
+                // Extract unique edited files from tool calls
+                let mut file_paths: Vec<String> = self.current_messages
+                    .iter()
+                    .flat_map(|m| &m.tool_calls)
+                    .filter_map(|tc| tc.file_path.clone())
+                    .collect();
+                file_paths.sort();
+                file_paths.dedup();
+
+                // Get git diff info for each file
+                self.current_file_changes = Self::get_file_changes(&file_paths).await;
+                self.selected_file_idx = 0;
+                self.current_diff = String::new();
+                self.files_scroll = 0;
+                self.todos_scroll = 0;
             }
         }
         Ok(())
     }
 
-    pub fn next_tab(&mut self) {
-        self.current_tab = self.current_tab.next();
-        self.focus = Focus::List;
+    pub fn toggle_focus(&mut self) {
+        self.focus = match self.focus {
+            Focus::Sessions => Focus::Detail,
+            Focus::Todos => Focus::Detail,
+            Focus::Files => Focus::Detail,
+            Focus::Detail => Focus::Sessions,
+        };
     }
 
-    pub fn prev_tab(&mut self) {
-        self.current_tab = self.current_tab.prev();
-        self.focus = Focus::List;
+    pub fn selected_session_todos_count(&self) -> usize {
+        self.selected_session().map(|s| s.todos.len()).unwrap_or(0)
     }
 
-    pub fn select_tab(&mut self, index: usize) {
-        let tabs = Tab::all();
-        if index < tabs.len() {
-            self.current_tab = tabs[index];
-            self.focus = Focus::List;
+    pub fn todos_scroll_up(&mut self) {
+        if self.todos_scroll > 0 {
+            self.todos_scroll = self.todos_scroll.saturating_sub(1);
         }
     }
 
-    pub fn toggle_focus(&mut self) {
-        self.focus = match self.focus {
-            Focus::List => Focus::Detail,
-            Focus::Detail => Focus::List,
-        };
+    pub fn todos_scroll_down(&mut self) {
+        if self.todos_scroll < self.todos_scroll_max {
+            self.todos_scroll += 1;
+        }
     }
 
     pub fn toggle_help(&mut self) {
         self.show_help = !self.show_help;
+    }
+
+    pub fn start_rename(&mut self) {
+        if let Some(session) = self.selected_session() {
+            self.rename_buffer = session.custom_name.clone()
+                .or_else(|| session.description.clone())
+                .unwrap_or_default();
+            self.renaming = true;
+        }
+    }
+
+    pub fn cancel_rename(&mut self) {
+        self.renaming = false;
+        self.rename_buffer.clear();
+    }
+
+    pub fn confirm_rename(&mut self) {
+        if let Some(i) = self.session_list_state.selected() {
+            if let Some(session) = self.sessions.get_mut(i) {
+                if self.rename_buffer.is_empty() {
+                    session.custom_name = None;
+                } else {
+                    session.custom_name = Some(self.rename_buffer.clone());
+                }
+            }
+        }
+        self.renaming = false;
+        self.rename_buffer.clear();
+    }
+
+    pub fn rename_input(&mut self, c: char) {
+        self.rename_buffer.push(c);
+    }
+
+    pub fn rename_backspace(&mut self) {
+        self.rename_buffer.pop();
+    }
+
+    pub fn start_file_filter(&mut self) {
+        self.file_filter_active = true;
+        self.file_filter.clear();
+    }
+
+    pub fn cancel_file_filter(&mut self) {
+        self.file_filter_active = false;
+        self.file_filter.clear();
+    }
+
+    pub fn file_filter_input(&mut self, c: char) {
+        self.file_filter.push(c);
+    }
+
+    pub fn file_filter_backspace(&mut self) {
+        self.file_filter.pop();
+        if self.file_filter.is_empty() {
+            self.file_filter_active = false;
+        }
+    }
+
+    pub fn filtered_files(&self) -> Vec<&FileChange> {
+        if self.file_filter.is_empty() {
+            self.current_file_changes.iter().collect()
+        } else {
+            let filter_lower = self.file_filter.to_lowercase();
+            self.current_file_changes
+                .iter()
+                .filter(|f| f.filename.to_lowercase().contains(&filter_lower)
+                         || f.path.to_lowercase().contains(&filter_lower))
+                .collect()
+        }
+    }
+
+    pub fn toggle_file_tree_mode(&mut self) {
+        self.file_tree_mode = !self.file_tree_mode;
     }
 
     pub fn set_status(&mut self, message: &str) {
@@ -216,116 +254,44 @@ impl App {
         self.status_message = None;
     }
 
-    pub fn enter_input_mode(&mut self) {
-        self.input_mode = InputMode::Input;
-    }
-
-    pub fn exit_input_mode(&mut self) {
-        self.input_mode = InputMode::Normal;
-        self.input_buffer.clear();
-    }
-
-    pub fn input_char(&mut self, c: char) {
-        self.input_buffer.push(c);
-    }
-
-    pub fn input_backspace(&mut self) {
-        self.input_buffer.pop();
-    }
-
-    pub fn submit_input(&mut self) -> Option<String> {
-        if self.input_buffer.is_empty() {
-            return None;
-        }
-        let input = self.input_buffer.clone();
-        self.input_buffer.clear();
-        self.input_mode = InputMode::Normal;
-        Some(input)
-    }
-
     pub fn list_next(&mut self) {
-        match self.current_tab {
-            Tab::Sessions => {
-                let len = self.sessions.len();
-                if len > 0 {
-                    let i = self.session_list_state.selected().unwrap_or(0);
-                    self.session_list_state.select(Some((i + 1) % len));
-                }
+        let len = self.sessions.len();
+        if len > 0 {
+            let i = self.session_list_state.selected().unwrap_or(0);
+            if i + 1 < len {
+                self.session_list_state.select(Some(i + 1));
             }
-            Tab::Agents => {
-                let len = self.agents.len();
-                if len > 0 {
-                    let i = self.agent_list_state.selected().unwrap_or(0);
-                    self.agent_list_state.select(Some((i + 1) % len));
-                }
-            }
-            Tab::Tasks => {
-                let len = self.tasks.len();
-                if len > 0 {
-                    let i = self.task_list_state.selected().unwrap_or(0);
-                    self.task_list_state.select(Some((i + 1) % len));
-                }
-            }
-            _ => {}
         }
     }
 
     pub fn list_prev(&mut self) {
-        match self.current_tab {
-            Tab::Sessions => {
-                let len = self.sessions.len();
-                if len > 0 {
-                    let i = self.session_list_state.selected().unwrap_or(0);
-                    self.session_list_state.select(Some(if i == 0 { len - 1 } else { i - 1 }));
-                }
+        let len = self.sessions.len();
+        if len > 0 {
+            let i = self.session_list_state.selected().unwrap_or(0);
+            if i > 0 {
+                self.session_list_state.select(Some(i - 1));
             }
-            Tab::Agents => {
-                let len = self.agents.len();
-                if len > 0 {
-                    let i = self.agent_list_state.selected().unwrap_or(0);
-                    self.agent_list_state.select(Some(if i == 0 { len - 1 } else { i - 1 }));
-                }
-            }
-            Tab::Tasks => {
-                let len = self.tasks.len();
-                if len > 0 {
-                    let i = self.task_list_state.selected().unwrap_or(0);
-                    self.task_list_state.select(Some(if i == 0 { len - 1 } else { i - 1 }));
-                }
-            }
-            _ => {}
         }
     }
 
-    // k - scroll up to see OLDER messages (increase scroll offset from bottom)
     pub fn scroll_up(&mut self) {
         if self.chat_scroll < self.chat_scroll_max {
             self.chat_scroll = (self.chat_scroll + 3).min(self.chat_scroll_max);
         }
     }
 
-    // j - scroll down to see NEWER messages (decrease scroll offset, towards bottom)
     pub fn scroll_down(&mut self) {
         if self.chat_scroll > 0 {
             self.chat_scroll = self.chat_scroll.saturating_sub(3);
         }
     }
 
-    // g - go to TOP (oldest messages)
     pub fn scroll_top(&mut self) {
         self.chat_scroll = self.chat_scroll_max;
     }
 
-    // G - go to BOTTOM (newest/latest messages)
     pub fn scroll_bottom(&mut self) {
         self.chat_scroll = 0;
-    }
-
-    pub fn toggle_diff_view(&mut self) {
-        self.show_diff_view = !self.show_diff_view;
-        self.diff_inline_view = false;
-        self.diff_scroll = 0;
-        self.selected_diff_idx = 0;
     }
 
     pub fn open_embedded_terminal(&mut self, cols: u16, rows: u16) -> anyhow::Result<()> {
@@ -376,89 +342,166 @@ impl App {
         Ok(())
     }
 
-    pub fn get_all_file_changes(&self) -> Vec<&crate::data::FileChange> {
-        self.current_messages
-            .iter()
-            .flat_map(|m| m.file_changes.iter())
-            .collect()
-    }
-
-    pub fn diff_next(&mut self) {
-        let changes = self.get_all_file_changes();
-        if !changes.is_empty() {
-            self.selected_diff_idx = (self.selected_diff_idx + 1) % changes.len();
-            self.diff_scroll = 0;
-        }
-    }
-
-    pub fn diff_prev(&mut self) {
-        let changes = self.get_all_file_changes();
-        if !changes.is_empty() {
-            self.selected_diff_idx = if self.selected_diff_idx == 0 {
-                changes.len() - 1
-            } else {
-                self.selected_diff_idx - 1
-            };
-            self.diff_scroll = 0;
-        }
-    }
-
-    pub fn get_selected_diff_file(&self) -> Option<String> {
-        let changes: Vec<_> = self.current_messages
-            .iter()
-            .flat_map(|m| m.file_changes.iter())
-            .collect();
-
-        changes.get(self.selected_diff_idx).map(|c| c.file_path.clone())
-    }
-
-    pub fn toggle_expand(&mut self) {
-        if self.current_tab == Tab::Agents {
-            if let Some(i) = self.agent_list_state.selected() {
-                if let Some(agent) = self.agents.get(i) {
-                    let id = agent.id.clone();
-                    if self.expanded_agents.contains(&id) {
-                        self.expanded_agents.remove(&id);
-                    } else {
-                        self.expanded_agents.insert(id);
-                    }
-                }
-            }
-        }
-    }
-
-    // Get selected session
+    /// Get selected session
     pub fn selected_session(&self) -> Option<&Session> {
         self.session_list_state.selected().and_then(|i| self.sessions.get(i))
     }
 
-    // Get selected agent
-    pub fn selected_agent(&self) -> Option<&Agent> {
-        self.agent_list_state.selected().and_then(|i| self.agents.get(i))
+    /// Get git diff info for files
+    async fn get_file_changes(file_paths: &[String]) -> Vec<FileChange> {
+        let mut changes = Vec::new();
+
+        for path in file_paths {
+            let filename = std::path::Path::new(path)
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or(path)
+                .to_string();
+
+            // Try to get git diff stats for this file
+            let (status, additions, deletions) = Self::get_git_stats(path).await;
+
+            changes.push(FileChange {
+                path: path.clone(),
+                filename,
+                status,
+                additions,
+                deletions,
+            });
+        }
+
+        changes
     }
 
-    // Summary stats for dashboard
-    pub fn total_sessions(&self) -> usize {
-        self.sessions.len()
+    async fn get_git_stats(file_path: &str) -> (FileStatus, u32, u32) {
+        use tokio::process::Command;
+
+        // Get diff stats
+        let output = Command::new("git")
+            .args(["diff", "--numstat", "--", file_path])
+            .output()
+            .await;
+
+        if let Ok(output) = output {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            if let Some(line) = stdout.lines().next() {
+                let parts: Vec<&str> = line.split_whitespace().collect();
+                if parts.len() >= 2 {
+                    let additions = parts[0].parse().unwrap_or(0);
+                    let deletions = parts[1].parse().unwrap_or(0);
+                    return (FileStatus::Modified, additions, deletions);
+                }
+            }
+        }
+
+        // Check if file is untracked
+        let status_output = Command::new("git")
+            .args(["status", "--porcelain", "--", file_path])
+            .output()
+            .await;
+
+        if let Ok(output) = status_output {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            if let Some(line) = stdout.lines().next() {
+                let status_code = &line[..2];
+                match status_code {
+                    "??" => return (FileStatus::Untracked, 0, 0),
+                    "A " | " A" => return (FileStatus::Added, 0, 0),
+                    "D " | " D" => return (FileStatus::Deleted, 0, 0),
+                    "R " => return (FileStatus::Renamed, 0, 0),
+                    _ => {}
+                }
+            }
+        }
+
+        (FileStatus::Modified, 0, 0)
     }
 
-    pub fn active_agents(&self) -> usize {
-        self.agents.iter().filter(|a| a.status == "running").count()
+    pub async fn load_file_diff(&mut self) {
+        if let Some(file) = self.current_file_changes.get(self.selected_file_idx) {
+            use tokio::process::Command;
+
+            let output = Command::new("git")
+                .args(["diff", "--color=never", "--", &file.path])
+                .output()
+                .await;
+
+            if let Ok(output) = output {
+                self.current_diff = String::from_utf8_lossy(&output.stdout).to_string();
+                if self.current_diff.is_empty() {
+                    // Maybe it's a new file, try to show content
+                    if let Ok(content) = tokio::fs::read_to_string(&file.path).await {
+                        self.current_diff = format!("New file: {}\n\n{}", file.path, content);
+                    }
+                }
+            } else {
+                self.current_diff = "Failed to load diff".to_string();
+            }
+        }
     }
 
-    pub fn pending_tasks(&self) -> usize {
-        self.tasks.iter().filter(|t| t.status == "pending").count()
+    pub fn files_select_next(&mut self) {
+        if !self.current_file_changes.is_empty() {
+            if self.selected_file_idx + 1 < self.current_file_changes.len() {
+                self.selected_file_idx += 1;
+            }
+        }
     }
 
-    pub fn completed_tasks(&self) -> usize {
-        self.tasks.iter().filter(|t| t.status == "completed").count()
+    pub fn files_select_prev(&mut self) {
+        if !self.current_file_changes.is_empty() && self.selected_file_idx > 0 {
+            self.selected_file_idx -= 1;
+        }
     }
 
-    pub fn today_messages(&self) -> u64 {
-        self.daily_stats.last().map(|s| s.message_count).unwrap_or(0)
+    /// Jump to next diff hunk (@@)
+    pub fn jump_to_next_hunk(&mut self) {
+        let hunk_positions: Vec<usize> = self.current_diff
+            .lines()
+            .enumerate()
+            .filter(|(_, line)| line.starts_with("@@"))
+            .map(|(i, _)| i)
+            .collect();
+
+        if hunk_positions.is_empty() {
+            return;
+        }
+
+        // Find next hunk after current scroll position (no wrap)
+        let current_line = self.chat_scroll_max.saturating_sub(self.chat_scroll) as usize;
+        for &pos in &hunk_positions {
+            if pos > current_line {
+                let new_scroll = self.chat_scroll_max.saturating_sub(pos as u16);
+                self.chat_scroll = new_scroll;
+                return;
+            }
+        }
+        // At last hunk - don't wrap, stay at end
     }
 
-    pub fn today_tool_calls(&self) -> u64 {
-        self.daily_stats.last().map(|s| s.tool_call_count).unwrap_or(0)
+    /// Jump to previous diff hunk (@@)
+    pub fn jump_to_prev_hunk(&mut self) {
+        let hunk_positions: Vec<usize> = self.current_diff
+            .lines()
+            .enumerate()
+            .filter(|(_, line)| line.starts_with("@@"))
+            .map(|(i, _)| i)
+            .collect();
+
+        if hunk_positions.is_empty() {
+            return;
+        }
+
+        // Find prev hunk before current scroll position (no wrap)
+        let current_line = self.chat_scroll_max.saturating_sub(self.chat_scroll) as usize;
+        for &pos in hunk_positions.iter().rev() {
+            if pos < current_line {
+                let new_scroll = self.chat_scroll_max.saturating_sub(pos as u16);
+                self.chat_scroll = new_scroll;
+                return;
+            }
+        }
+        // At first hunk - don't wrap, stay at beginning
     }
+
 }

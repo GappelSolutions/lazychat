@@ -131,22 +131,6 @@ impl EmbeddedTerminal {
         Ok(())
     }
 
-    pub fn get_screen(&self) -> Option<Vec<String>> {
-        self.parser.lock().ok().map(|p| {
-            let screen = p.screen();
-            (0..screen.size().0)
-                .map(|row| {
-                    let mut line = String::new();
-                    for col in 0..screen.size().1 {
-                        let cell = screen.cell(row, col).unwrap();
-                        line.push(cell.contents().chars().next().unwrap_or(' '));
-                    }
-                    line.trim_end().to_string()
-                })
-                .collect()
-        })
-    }
-
     pub fn get_screen_with_styles(&self) -> Option<Vec<Vec<(char, vt100::Color, vt100::Color, bool)>>> {
         self.parser.lock().ok().map(|p| {
             let screen = p.screen();
@@ -169,10 +153,6 @@ impl EmbeddedTerminal {
 
     pub fn cursor_position(&self) -> Option<(u16, u16)> {
         self.parser.lock().ok().map(|p| p.screen().cursor_position())
-    }
-
-    pub fn is_running(&self) -> bool {
-        *self.running.lock().unwrap()
     }
 
     pub fn stop(&mut self) {

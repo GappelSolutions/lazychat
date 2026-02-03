@@ -204,28 +204,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3e64b0cc0439b12df2fa678eae89a1c56a529fd067a9115f7827f1fffd22b32"
 
 [[package]]
-name = "claude-tui"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "chrono",
- "clap",
- "crossterm",
- "dirs",
- "notify",
- "portable-pty",
- "ratatui",
- "serde",
- "serde_json",
- "similar",
- "thiserror 2.0.18",
- "tokio",
- "tracing",
- "tracing-subscriber",
- "vt100",
-]
-
-[[package]]
 name = "colorchoice"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -576,6 +554,28 @@ name = "lazy_static"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bbd2bcb4c963f2ddae06a2efc7e9f3591312473c50c6685e1f298068316e66fe"
+
+[[package]]
+name = "lazychat"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "clap",
+ "crossterm",
+ "dirs",
+ "notify",
+ "portable-pty",
+ "ratatui",
+ "serde",
+ "serde_json",
+ "similar",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "vt100",
+]
 
 [[package]]
 name = "libc"

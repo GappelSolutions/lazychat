@@ -1,22 +1,12 @@
-use crate::app::{App, Focus, InputMode};
+use crate::app::App;
 use ratatui::{
+    layout::{Constraint, Direction, Layout},
     prelude::*,
     widgets::{Block, Borders, List, ListItem, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState},
 };
-use super::{styled_block, relative_time, truncate, status_style, MUTED, SELECTED_BG, INFO, SUCCESS, WARNING};
+use super::{styled_block, relative_time, truncate, MUTED, SELECTED_BG, INFO, SUCCESS, WARNING};
 
-pub fn draw(f: &mut Frame, app: &mut App, area: Rect) {
-    let chunks = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(25), Constraint::Percentage(75)])
-        .split(area);
-
-    draw_session_list(f, app, chunks[0]);
-    draw_chat_view(f, app, chunks[1]);
-}
-
-fn draw_session_list(f: &mut Frame, app: &mut App, area: Rect) {
-    let is_focused = app.focus == Focus::List;
+pub fn draw_session_list(f: &mut Frame, app: &mut App, area: Rect, is_focused: bool) {
     let title = format!("Sessions ({})", app.sessions.len());
     let block = styled_block(&title, is_focused);
 
@@ -29,7 +19,46 @@ fn draw_session_list(f: &mut Frame, app: &mut App, area: Rect) {
         return;
     }
 
-    let max_name_width = (area.width as usize).saturating_sub(12).min(20);
+    // If renaming, show input at top
+    if app.renaming {
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(3),
+                Constraint::Min(0),
+            ])
+            .split(area);
+
+        // Rename input
+        let input_block = Block::default()
+            .borders(Borders::ALL)
+            .border_style(Style::default().fg(Color::Yellow))
+            .title(" Rename (Enter to save, Esc to cancel) ")
+            .title_style(Style::default().fg(Color::Yellow).bold());
+
+        let input = Paragraph::new(app.rename_buffer.as_str())
+            .block(input_block)
+            .style(Style::default().fg(Color::White));
+        f.render_widget(input, chunks[0]);
+
+        // Position cursor at end of input
+        let cursor_x = chunks[0].x + 1 + app.rename_buffer.chars().count() as u16;
+        let cursor_y = chunks[0].y + 1;
+        if cursor_x < chunks[0].x + chunks[0].width - 1 {
+            f.set_cursor_position(ratatui::layout::Position::new(cursor_x, cursor_y));
+        }
+
+        // Draw session list in remaining space
+        draw_session_list_inner(f, app, chunks[1], is_focused);
+        return;
+    }
+
+    draw_session_list_inner(f, app, area, is_focused);
+}
+
+fn draw_session_list_inner(f: &mut Frame, app: &mut App, area: Rect, is_focused: bool) {
+    let block = styled_block("Sessions", is_focused);
+    let max_name_width = (area.width as usize).saturating_sub(4).min(25);
 
     let items: Vec<ListItem> = app
         .sessions
@@ -38,21 +67,29 @@ fn draw_session_list(f: &mut Frame, app: &mut App, area: Rect) {
         .map(|(i, session)| {
             let is_selected = app.session_list_state.selected() == Some(i);
 
-            let (status_char, status_text) = match session.status.as_str() {
-                "active" => ("●", "[active]"),
-                "idle" => ("○", "[idle]"),
-                _ => ("◌", ""),
+            // More distinct status indicators
+            let (status_char, status_color) = match session.status.as_str() {
+                "working" => ("⟳", Color::Cyan),       // Cyan spinner = actively processing (<10s)
+                "active" => ("▶", Color::Green),       // Green play = recent activity (<2 min)
+                "idle" => ("●", Color::Yellow),        // Yellow dot = waiting (2-30 min)
+                "inactive" => ("○", Color::DarkGray),  // Gray circle = old (>30 min)
+                "waiting" => ("◆", Color::Magenta),    // Magenta = waiting for user (from hook)
+                _ => ("○", Color::DarkGray),
             };
 
+            // Use custom_name > description > project_name
+            let display_name = session.custom_name.as_ref()
+                .or(session.description.as_ref())
+                .map(|d| truncate(d, max_name_width))
+                .unwrap_or_else(|| session.project_name.clone());
+
             let content = Line::from(vec![
-                Span::styled(status_char, status_style(&session.status)),
+                Span::styled(status_char, Style::default().fg(status_color)),
                 Span::raw(" "),
                 Span::styled(
-                    truncate(&session.project_name, max_name_width.saturating_sub(10)),
+                    truncate(&display_name, max_name_width),
                     Style::default().fg(if is_selected { Color::White } else { Color::Gray }),
                 ),
-                Span::raw(" "),
-                Span::styled(status_text, status_style(&session.status)),
             ]);
 
             let time_line = Line::from(vec![
@@ -62,7 +99,7 @@ fn draw_session_list(f: &mut Frame, app: &mut App, area: Rect) {
                     Style::default().fg(MUTED).italic(),
                 ),
                 Span::styled(
-                    format!(" • {} msgs", session.message_count),
+                    format!(" {} msgs", session.message_count),
                     Style::default().fg(MUTED),
                 ),
             ]);
@@ -79,30 +116,182 @@ fn draw_session_list(f: &mut Frame, app: &mut App, area: Rect) {
 
     let list = List::new(items)
         .block(block)
-        .highlight_style(Style::default().bg(SELECTED_BG).fg(Color::White));
+        .highlight_style(Style::default().bg(SELECTED_BG));
 
     f.render_stateful_widget(list, area, &mut app.session_list_state);
 }
 
-fn draw_chat_view(f: &mut Frame, app: &mut App, area: Rect) {
-    let is_focused = app.focus == Focus::Detail;
-
-    // If embedded terminal is active, show it
+pub fn draw_detail_view(f: &mut Frame, app: &mut App, area: Rect, is_focused: bool) {
+    // If embedded terminal is active, show it full screen
     if app.terminal_mode && app.embedded_terminal.is_some() {
         draw_embedded_terminal(f, app, area);
         return;
     }
 
-    let chunks = Layout::default()
-        .direction(Direction::Vertical)
-        .constraints([
-            Constraint::Length(3),
-            Constraint::Min(0),
-        ])
-        .split(area);
+    // Show diff view when in diff mode OR when Files is focused (preview)
+    if app.diff_mode || app.focus == crate::app::Focus::Files {
+        draw_diff_view(f, app, area, is_focused);
+    } else if app.focus == crate::app::Focus::Todos {
+        // Show todos preview when Todos panel is focused
+        draw_todos_preview(f, app, area);
+    } else {
+        // Layout: header + chat
+        let chunks = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(3),   // Header (with border)
+                Constraint::Min(10),     // Chat
+            ])
+            .split(area);
 
-    draw_session_header(f, app, chunks[0]);
-    draw_messages(f, app, chunks[1], is_focused);
+        draw_session_header(f, app, chunks[0]);
+        draw_messages(f, app, chunks[1], is_focused);
+    }
+}
+
+fn draw_todos_preview(f: &mut Frame, app: &mut App, area: Rect) {
+    let todos: Vec<_> = app.selected_session()
+        .map(|s| s.todos.iter().collect())
+        .unwrap_or_default();
+
+    let title = format!("Todos ({})", todos.len());
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(super::BORDER_COLOR))
+        .title(format!(" {} ", title))
+        .title_style(Style::default().fg(Color::White).bold());
+
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    if todos.is_empty() {
+        let empty = Paragraph::new("No todos")
+            .style(Style::default().fg(MUTED))
+            .alignment(Alignment::Center);
+        f.render_widget(empty, inner);
+        return;
+    }
+
+    // Sort: in_progress → pending → completed
+    let mut sorted_todos = todos;
+    sorted_todos.sort_by(|a, b| {
+        let status_order = |s: &str| match s {
+            "in_progress" => 0,
+            "pending" => 1,
+            "completed" => 2,
+            _ => 1,
+        };
+        status_order(&a.status).cmp(&status_order(&b.status))
+    });
+
+    let max_width = inner.width.saturating_sub(4) as usize;
+    let lines: Vec<Line> = sorted_todos.iter().map(|todo| {
+        let (icon, style) = match todo.status.as_str() {
+            "in_progress" => ("▶", Style::default().fg(Color::Cyan)),
+            "completed" => ("✓", Style::default().fg(MUTED)),
+            _ => ("○", Style::default().fg(Color::Gray)),
+        };
+
+        Line::from(vec![
+            Span::styled(format!(" {} ", icon), style),
+            Span::styled(
+                super::truncate(&todo.content, max_width),
+                style,
+            ),
+        ])
+    }).collect();
+
+    // Calculate scroll
+    let total_lines = lines.len() as u16;
+    let visible_lines = inner.height;
+    app.todos_scroll_max = total_lines.saturating_sub(visible_lines);
+
+    let scroll_offset = app.todos_scroll.min(app.todos_scroll_max);
+    let visible: Vec<Line> = lines.into_iter().skip(scroll_offset as usize).take(visible_lines as usize).collect();
+
+    let paragraph = Paragraph::new(visible);
+    f.render_widget(paragraph, inner);
+}
+
+fn draw_diff_view(f: &mut Frame, app: &mut App, area: Rect, is_focused: bool) {
+    let file = app.current_file_changes.get(app.selected_file_idx);
+    let title = file.map(|f| f.path.clone()).unwrap_or_else(|| "No file selected".to_string());
+
+    // Show active border only when actually in diff_mode (entered with Enter)
+    let show_active = is_focused && app.diff_mode;
+
+    let border_color = if show_active {
+        super::BORDER_ACTIVE
+    } else {
+        super::BORDER_COLOR
+    };
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(border_color))
+        .title(format!(" {} ", title))
+        .title_style(Style::default().fg(if show_active { Color::Green } else { Color::White }).bold());
+
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    if app.current_diff.is_empty() {
+        let empty = Paragraph::new("No diff available\n\nSelect a file with j/k")
+            .style(Style::default().fg(MUTED))
+            .alignment(Alignment::Center);
+        f.render_widget(empty, inner);
+        return;
+    }
+
+    // Parse and colorize diff with line wrapping
+    let max_width = inner.width as usize;
+    let mut lines: Vec<Line> = Vec::new();
+
+    for line in app.current_diff.lines() {
+        let style = if line.starts_with('+') && !line.starts_with("+++") {
+            Style::default().fg(Color::Green)
+        } else if line.starts_with('-') && !line.starts_with("---") {
+            Style::default().fg(Color::Red)
+        } else if line.starts_with("@@") {
+            Style::default().fg(Color::Cyan)
+        } else if line.starts_with("diff") || line.starts_with("index") {
+            Style::default().fg(Color::Yellow)
+        } else {
+            Style::default().fg(Color::Gray)
+        };
+
+        // Wrap long lines
+        if line.chars().count() <= max_width {
+            lines.push(Line::from(Span::styled(line, style)));
+        } else {
+            let mut remaining = line;
+            while !remaining.is_empty() {
+                let (chunk, rest) = if remaining.chars().count() <= max_width {
+                    (remaining, "")
+                } else {
+                    let byte_idx = remaining
+                        .char_indices()
+                        .nth(max_width)
+                        .map(|(i, _)| i)
+                        .unwrap_or(remaining.len());
+                    (&remaining[..byte_idx], &remaining[byte_idx..])
+                };
+                lines.push(Line::from(Span::styled(chunk, style)));
+                remaining = rest;
+            }
+        }
+    }
+
+    // Calculate scroll
+    let total_lines = lines.len() as u16;
+    let visible_lines = inner.height;
+    app.chat_scroll_max = total_lines.saturating_sub(visible_lines);
+
+    let scroll_offset = app.chat_scroll.min(app.chat_scroll_max);
+    let visible: Vec<Line> = lines.into_iter().skip(scroll_offset as usize).take(visible_lines as usize).collect();
+
+    let paragraph = Paragraph::new(visible);
+    f.render_widget(paragraph, inner);
 }
 
 fn draw_embedded_terminal(f: &mut Frame, app: &mut App, area: Rect) {
@@ -183,39 +372,42 @@ fn draw_session_header(f: &mut Frame, app: &App, area: Rect) {
 
     let content = match session {
         Some(s) => {
-            Line::from(vec![
-                Span::styled("📁 ", Style::default()),
+            let mut spans = vec![
+                Span::styled(" ", Style::default()),
                 Span::styled(&s.project, Style::default().fg(Color::White).bold()),
-                Span::raw("  "),
-                Span::styled("ID: ", Style::default().fg(MUTED)),
-                Span::styled(truncate(&s.id, 12), Style::default().fg(Color::Gray)),
-                Span::raw("  "),
-                Span::styled("Messages: ", Style::default().fg(MUTED)),
-                Span::styled(s.message_count.to_string(), Style::default().fg(INFO)),
-                Span::raw("  "),
-                Span::styled(&s.status, status_style(&s.status)),
-            ])
+                Span::styled("  │  ", Style::default().fg(Color::DarkGray)),
+                Span::styled(truncate(&s.id, 10), Style::default().fg(Color::DarkGray)),
+                Span::styled("  │  ", Style::default().fg(Color::DarkGray)),
+                Span::styled(format!("{} msgs", s.message_count), Style::default().fg(INFO)),
+            ];
+
+            if !s.todos.is_empty() {
+                spans.push(Span::styled("  │  ", Style::default().fg(Color::DarkGray)));
+                spans.push(Span::styled(format!("{} todos", s.todos.len()), Style::default().fg(WARNING)));
+            }
+
+            spans.push(Span::styled(" ", Style::default()));
+            Line::from(spans)
         }
-        None => {
-            Line::from(Span::styled("No session selected", Style::default().fg(MUTED)))
-        }
+        None => Line::from(Span::styled(" No session selected ", Style::default().fg(MUTED))),
     };
 
     let block = Block::default()
-        .borders(Borders::BOTTOM)
-        .border_style(Style::default().fg(Color::DarkGray));
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::DarkGray))
+        .border_type(ratatui::widgets::BorderType::Rounded);
 
-    let paragraph = Paragraph::new(content)
-        .block(block)
-        .alignment(Alignment::Left);
+    let inner = block.inner(area);
+    f.render_widget(block, area);
 
-    f.render_widget(paragraph, area);
+    let paragraph = Paragraph::new(content).alignment(Alignment::Left);
+    f.render_widget(paragraph, inner);
 }
 
 fn draw_messages(f: &mut Frame, app: &mut App, area: Rect, is_focused: bool) {
     let session = app.selected_session();
     let title = match session {
-        Some(s) => format!("Chat - {} ({} msgs)", s.project_name, app.current_messages.len()),
+        Some(s) => format!("Chat - {}", s.project_name),
         None => "Chat".to_string(),
     };
 
@@ -224,7 +416,7 @@ fn draw_messages(f: &mut Frame, app: &mut App, area: Rect, is_focused: bool) {
     f.render_widget(block, area);
 
     if app.messages_loading {
-        let loading = Paragraph::new("Loading messages...")
+        let loading = Paragraph::new("Loading...")
             .style(Style::default().fg(MUTED))
             .alignment(Alignment::Center);
         f.render_widget(loading, inner);
@@ -232,7 +424,7 @@ fn draw_messages(f: &mut Frame, app: &mut App, area: Rect, is_focused: bool) {
     }
 
     if app.current_messages.is_empty() {
-        let empty = Paragraph::new("No messages yet\n\nPress 'o' to open Claude session")
+        let empty = Paragraph::new("No messages\n\nPress 'o' to open Claude")
             .style(Style::default().fg(MUTED))
             .alignment(Alignment::Center);
         f.render_widget(empty, inner);

@@ -1,10 +1,8 @@
-use crate::app::{App, InputMode, Focus, Tab};
-use crate::data::Session;
+use crate::app::{App, Focus};
 use crate::ui;
 use anyhow::Result;
 use crossterm::event::{self, Event, KeyCode, KeyEvent, KeyModifiers};
 use ratatui::prelude::*;
-use std::process::Command;
 use std::time::Duration;
 
 /// Convert a key event to bytes for the terminal
@@ -13,7 +11,6 @@ fn key_to_bytes(key: KeyEvent) -> Vec<u8> {
 
     match key.code {
         KeyCode::Char(c) if ctrl => {
-            // Ctrl+A = 1, Ctrl+B = 2, etc.
             let ctrl_code = (c.to_ascii_lowercase() as u8).wrapping_sub(b'a').wrapping_add(1);
             vec![ctrl_code]
         }
@@ -35,114 +32,27 @@ fn key_to_bytes(key: KeyEvent) -> Vec<u8> {
     }
 }
 
-/// Check if running inside Zellij
-fn is_zellij() -> bool {
-    std::env::var("ZELLIJ").is_ok()
-}
-
-/// Get project directory from session
-fn get_project_dir(session: &Session) -> String {
-    if session.project.starts_with('/') {
-        session.project.clone()
-    } else {
-        format!("/{}", session.project.replace('-', "/"))
-    }
-}
-
-/// Spawn Claude in a Zellij pane or fallback to terminal
-fn spawn_claude_session(session: &Session) -> Result<()> {
-    let project_dir = get_project_dir(session);
-
-    if is_zellij() {
-        // Use floating pane with --close-on-exit
-        // The --floating flag reuses the floating layer
-        // If a floating pane is already visible, it replaces it
-        let claude_cmd = format!(
-            "cd '{}' 2>/dev/null || cd ~; claude --resume {} --dangerously-skip-permissions",
-            project_dir,
-            session.id
-        );
-
-        Command::new("zellij")
-            .args(["run", "--floating", "--close-on-exit", "-c", &project_dir, "--", "bash", "-c", &claude_cmd])
-            .spawn()?;
-
-        return Ok(());
-    }
-
-    // Fallback to terminal
-    let claude_cmd = format!(
-        "cd '{}' 2>/dev/null || cd ~; claude --resume {} --dangerously-skip-permissions",
-        project_dir,
-        session.id
-    );
-    spawn_in_terminal(&claude_cmd)
-}
-
-/// Spawn a new Claude session
-fn spawn_new_claude() -> Result<()> {
-    if is_zellij() {
-        Command::new("zellij")
-            .args(["run", "--floating", "--close-on-exit", "--", "claude", "--dangerously-skip-permissions"])
-            .spawn()?;
-        return Ok(());
-    }
-
-    spawn_in_terminal("claude --dangerously-skip-permissions")
-}
-
-/// Helper to spawn a command in a terminal (fallback when not in Zellij)
-fn spawn_in_terminal(cmd: &str) -> Result<()> {
-    // Try kitty
-    if Command::new("kitty")
-        .args(["--", "bash", "-c", cmd])
-        .spawn()
-        .is_ok()
-    {
-        return Ok(());
-    }
-
-    // Try alacritty
-    if Command::new("alacritty")
-        .args(["-e", "bash", "-c", cmd])
-        .spawn()
-        .is_ok()
-    {
-        return Ok(());
-    }
-
-    // Fallback to macOS Terminal.app
-    let apple_script = format!(
-        r#"tell application "Terminal"
-            do script "{}"
-            activate
-        end tell"#,
-        cmd.replace('\\', "\\\\").replace('"', "\\\"")
-    );
-
-    Command::new("osascript")
-        .args(["-e", &apple_script])
-        .spawn()?;
-
-    Ok(())
-}
-
 pub async fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> Result<()> {
     let mut last_selected_session: Option<usize> = None;
+    let mut last_refresh = std::time::Instant::now();
 
     loop {
         terminal.draw(|f| ui::draw(f, app))?;
 
-        // Check if session selection changed, load messages
-        if app.current_tab == Tab::Sessions {
-            let current_selection = app.session_list_state.selected();
-            if current_selection != last_selected_session {
-                last_selected_session = current_selection;
-                let _ = app.load_session_messages().await;
-            }
+        // Auto-refresh session data every second
+        if last_refresh.elapsed() >= Duration::from_secs(1) {
+            let _ = app.load_data().await;
+            last_refresh = std::time::Instant::now();
         }
 
-        // Poll for events with timeout for refresh
+        // Check if session selection changed, load messages
+        let current_selection = app.session_list_state.selected();
+        if current_selection != last_selected_session {
+            last_selected_session = current_selection;
+            let _ = app.load_session_messages().await;
+        }
+
+        // Poll for events with timeout
         if event::poll(Duration::from_millis(100))? {
             if let Event::Key(key) = event::read()? {
                 if handle_key(app, key).await? {
@@ -158,12 +68,8 @@ pub async fn run_app<B: Backend>(terminal: &mut Terminal<B>, app: &mut App) -> R
 }
 
 async fn handle_key(app: &mut App, key: KeyEvent) -> Result<bool> {
-    // Terminal mode - forward most keys to embedded terminal
+    // Terminal mode - forward keys to embedded terminal
     if app.terminal_mode {
-        // Multiple ways to exit terminal mode:
-        // - Ctrl+\ (traditional)
-        // - Ctrl+] (alternative)
-        // - Double Escape (user-friendly)
         let exit_keys = matches!(
             (key.code, key.modifiers.contains(KeyModifiers::CONTROL)),
             (KeyCode::Char('\\'), true) |
@@ -177,7 +83,6 @@ async fn handle_key(app: &mut App, key: KeyEvent) -> Result<bool> {
             return Ok(false);
         }
 
-        // Forward key to terminal
         let data = key_to_bytes(key);
         if !data.is_empty() {
             let _ = app.send_to_terminal(&data);
@@ -196,33 +101,37 @@ async fn handle_key(app: &mut App, key: KeyEvent) -> Result<bool> {
         return Ok(false);
     }
 
-    // Input mode handling
-    if app.input_mode == InputMode::Input {
+    // Rename input mode
+    if app.renaming {
         match key.code {
-            KeyCode::Esc => {
-                app.exit_input_mode();
-                app.clear_status();
-            }
-            KeyCode::Enter => {
-                // Just clear and exit input mode (input feature not fully implemented)
-                app.submit_input();
-                app.set_status("Input submitted (use 'o' to open interactive Claude session)");
-            }
-            KeyCode::Backspace => {
-                app.input_backspace();
-            }
-            KeyCode::Char(c) => {
-                app.input_char(c);
-            }
+            KeyCode::Esc => app.cancel_rename(),
+            KeyCode::Enter => app.confirm_rename(),
+            KeyCode::Backspace => app.rename_backspace(),
+            KeyCode::Char(c) => app.rename_input(c),
             _ => {}
         }
         return Ok(false);
     }
 
-    // Clear status on any key press (in normal mode)
+    // File filter input mode
+    if app.file_filter_active {
+        match key.code {
+            KeyCode::Esc => app.cancel_file_filter(),
+            KeyCode::Backspace => app.file_filter_backspace(),
+            KeyCode::Enter => {
+                // Just close filter mode but keep the filter
+                app.file_filter_active = false;
+            }
+            KeyCode::Char(c) => app.file_filter_input(c),
+            _ => {}
+        }
+        return Ok(false);
+    }
+
+    // Clear status on any key press
     app.clear_status();
 
-    // Normal mode - global keys (lazygit style)
+    // Normal mode
     match key.code {
         // Quit
         KeyCode::Char('q') => {
@@ -234,144 +143,204 @@ async fn handle_key(app: &mut App, key: KeyEvent) -> Result<bool> {
             return Ok(true);
         }
 
-        // Tab navigation (1-5 or h/l)
-        KeyCode::Char('1') => app.select_tab(0),
-        KeyCode::Char('2') => app.select_tab(1),
-        KeyCode::Char('3') => app.select_tab(2),
-        KeyCode::Char('4') => app.select_tab(3),
-        KeyCode::Char('5') => app.select_tab(4),
+        // Tab = switch focus between left and detail
+        KeyCode::Tab | KeyCode::BackTab => app.toggle_focus(),
 
-        // h/l = switch between tabs
-        KeyCode::Char('h') => app.prev_tab(),
-        KeyCode::Char('l') => app.next_tab(),
-        KeyCode::Char('[') => app.prev_tab(),
-        KeyCode::Char(']') => app.next_tab(),
-
-        // Tab = switch between panes within a tab
-        KeyCode::Tab => app.toggle_focus(),
-        KeyCode::BackTab => app.toggle_focus(),
-
-        // List navigation (vim style: j/k or arrows)
-        KeyCode::Char('j') | KeyCode::Down => {
-            if app.focus == Focus::Detail {
-                app.scroll_down();
-            } else {
-                app.list_next();
-            }
-        }
-        KeyCode::Char('k') | KeyCode::Up => {
-            if app.focus == Focus::Detail {
-                app.scroll_up();
-            } else {
-                app.list_prev();
+        // h = go UP in left sidebar, or previous hunk in diff mode
+        KeyCode::Char('h') => {
+            match app.focus {
+                Focus::Detail if app.diff_mode => {
+                    app.jump_to_prev_hunk();
+                }
+                Focus::Todos if !app.current_file_changes.is_empty() => app.focus = Focus::Files,
+                Focus::Todos => app.focus = Focus::Sessions,
+                Focus::Files => app.focus = Focus::Sessions,
+                _ => {}
             }
         }
 
-        // Page up/down for scrolling (Ctrl+d/u like vim)
-        KeyCode::PageDown | KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            for _ in 0..10 {
-                app.scroll_down();
-            }
-        }
-        KeyCode::PageUp | KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            for _ in 0..10 {
-                app.scroll_up();
-            }
-        }
-
-        // Expand/collapse or open
-        KeyCode::Enter => {
-            match app.current_tab {
-                Tab::Agents => app.toggle_expand(),
-                Tab::Sessions => {
-                    if app.focus == Focus::List {
-                        app.focus = Focus::Detail;
-                    }
+        // l = go DOWN in left sidebar, or next hunk in diff mode
+        KeyCode::Char('l') => {
+            match app.focus {
+                Focus::Detail if app.diff_mode => {
+                    app.jump_to_next_hunk();
+                }
+                Focus::Sessions if !app.current_file_changes.is_empty() => {
+                    app.focus = Focus::Files;
+                    app.load_file_diff().await;
+                }
+                Focus::Sessions if app.selected_session_todos_count() > 0 => {
+                    app.focus = Focus::Todos;
+                }
+                Focus::Files if app.selected_session_todos_count() > 0 => {
+                    app.focus = Focus::Todos;
                 }
                 _ => {}
             }
         }
 
-        // Refresh data
-        KeyCode::Char('r') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-            app.load_data().await?;
+        // j/k = navigate within current panel (j=down, k=up)
+        KeyCode::Char('j') | KeyCode::Down => {
+            match app.focus {
+                Focus::Sessions => app.list_next(),
+                Focus::Todos => app.todos_scroll_down(),
+                Focus::Files => {
+                    app.files_select_next();
+                    app.load_file_diff().await;
+                }
+                Focus::Detail if app.diff_mode => app.scroll_up(),   // diff: scroll_up = view moves down
+                Focus::Detail => app.scroll_down(),                   // chat: scroll_down = view moves down
+            }
         }
-        KeyCode::Char('R') => {
-            app.load_data().await?;
-            if app.current_tab == Tab::Sessions {
-                app.load_session_messages().await?;
+        KeyCode::Char('k') | KeyCode::Up => {
+            match app.focus {
+                Focus::Sessions => app.list_prev(),
+                Focus::Todos => app.todos_scroll_up(),
+                Focus::Files => {
+                    app.files_select_prev();
+                    app.load_file_diff().await;
+                }
+                Focus::Detail if app.diff_mode => app.scroll_down(), // diff: scroll_down = view moves up
+                Focus::Detail => app.scroll_up(),                     // chat: scroll_up = view moves up
             }
         }
 
-        // Home/End for lists
-        KeyCode::Char('g') => {
-            if app.focus == Focus::Detail {
-                app.scroll_top();
-            } else {
-                match app.current_tab {
-                    Tab::Sessions => app.session_list_state.select(Some(0)),
-                    Tab::Agents => app.agent_list_state.select(Some(0)),
-                    Tab::Tasks => app.task_list_state.select(Some(0)),
-                    _ => {}
+        // Page up/down (Ctrl+U = up, Ctrl+D = down)
+        KeyCode::PageUp | KeyCode::Char('u') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            if app.diff_mode || app.focus == Focus::Files {
+                // Diff view: scroll_down moves view up (towards top)
+                for _ in 0..10 {
+                    app.scroll_down();
                 }
+            } else {
+                // Chat view: scroll_up moves view up (towards earlier messages)
+                for _ in 0..10 {
+                    app.scroll_up();
+                }
+            }
+        }
+        KeyCode::PageDown | KeyCode::Char('d') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            if app.diff_mode || app.focus == Focus::Files {
+                // Diff view: scroll_up moves view down (towards bottom)
+                for _ in 0..10 {
+                    app.scroll_up();
+                }
+            } else {
+                // Chat view: scroll_down moves view down (towards newer messages)
+                for _ in 0..10 {
+                    app.scroll_down();
+                }
+            }
+        }
+
+        // Enter = fullscreen detail view (from any left panel)
+        KeyCode::Enter => {
+            match app.focus {
+                Focus::Files => {
+                    app.focus = Focus::Detail;
+                    app.diff_mode = true;
+                    app.fullscreen = true;
+                }
+                Focus::Sessions | Focus::Todos => {
+                    app.focus = Focus::Detail;
+                    app.diff_mode = false;
+                    app.fullscreen = true;
+                }
+                Focus::Detail => {}
+            }
+        }
+
+        // Esc = exit fullscreen first, then go back
+        KeyCode::Esc => {
+            if app.fullscreen {
+                app.fullscreen = false;
+            } else {
+                match app.focus {
+                    Focus::Detail if app.diff_mode => {
+                        app.focus = Focus::Files;
+                        app.diff_mode = false;
+                    }
+                    Focus::Detail | Focus::Todos | Focus::Files => app.focus = Focus::Sessions,
+                    Focus::Sessions => {}
+                }
+            }
+        }
+
+
+        // Top/bottom
+        KeyCode::Char('g') => {
+            match app.focus {
+                Focus::Sessions => app.session_list_state.select(Some(0)),
+                Focus::Todos => app.todos_scroll = 0,
+                Focus::Files => app.files_scroll = 0,
+                Focus::Detail => app.scroll_top(),
             }
         }
         KeyCode::Char('G') => {
-            if app.focus == Focus::Detail {
-                app.scroll_bottom();
-            } else {
-                match app.current_tab {
-                    Tab::Sessions => {
-                        let len = app.sessions.len();
-                        if len > 0 {
-                            app.session_list_state.select(Some(len - 1));
-                        }
+            match app.focus {
+                Focus::Sessions => {
+                    let len = app.sessions.len();
+                    if len > 0 {
+                        app.session_list_state.select(Some(len - 1));
                     }
-                    Tab::Agents => {
-                        let len = app.agents.len();
-                        if len > 0 {
-                            app.agent_list_state.select(Some(len - 1));
-                        }
-                    }
-                    Tab::Tasks => {
-                        let len = app.tasks.len();
-                        if len > 0 {
-                            app.task_list_state.select(Some(len - 1));
-                        }
-                    }
-                    _ => {}
                 }
+                Focus::Todos => app.todos_scroll = app.todos_scroll_max,
+                Focus::Files => app.files_scroll = app.files_scroll_max,
+                Focus::Detail => app.scroll_bottom(),
             }
         }
 
-        // Open embedded Claude terminal
+        // Open session in embedded terminal (only from Sessions panel)
         KeyCode::Char('o') => {
-            if app.current_tab == Tab::Sessions {
-                if app.selected_session().is_some() {
-                    // Use embedded terminal (80x24 default, will be resized on render)
-                    match app.open_embedded_terminal(80, 24) {
-                        Ok(_) => app.set_status("Opening Claude... (Ctrl+q to exit)"),
-                        Err(e) => app.set_error(&format!("Failed: {}", e)),
-                    }
-                } else {
-                    app.set_error("No session selected");
-                }
-            }
-        }
-
-        // New embedded Claude session
-        KeyCode::Char('n') => {
-            if app.current_tab == Tab::Sessions {
-                match app.open_new_embedded_terminal(80, 24) {
-                    Ok(_) => app.set_status("Starting new Claude... (Ctrl+q to exit)"),
+            if app.focus == Focus::Files || app.diff_mode {
+                // Disabled in diff view for now
+            } else if app.selected_session().is_some() {
+                match app.open_embedded_terminal(80, 24) {
+                    Ok(_) => app.set_status("Opening Claude... (Ctrl+q to exit)"),
                     Err(e) => app.set_error(&format!("Failed: {}", e)),
                 }
+            } else {
+                app.set_error("No session selected");
+            }
+        }
+
+        // New session
+        KeyCode::Char('n') => {
+            match app.open_new_embedded_terminal(80, 24) {
+                Ok(_) => app.set_status("Starting new Claude... (Ctrl+q to exit)"),
+                Err(e) => app.set_error(&format!("Failed: {}", e)),
+            }
+        }
+
+        // Ctrl+F = exit fullscreen (Enter to enter)
+        KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            if app.fullscreen {
+                app.fullscreen = false;
             }
         }
 
         // Help
-        KeyCode::Char('?') => {
-            app.toggle_help();
+        KeyCode::Char('?') => app.toggle_help(),
+
+        // Rename session
+        KeyCode::Char('r') => {
+            if app.focus == Focus::Sessions {
+                app.start_rename();
+            }
+        }
+
+        // File filter
+        KeyCode::Char('f') => {
+            if app.focus == Focus::Files {
+                app.start_file_filter();
+            }
+        }
+
+        // Toggle file tree view
+        KeyCode::Char('t') => {
+            if app.focus == Focus::Files {
+                app.toggle_file_tree_mode();
+            }
         }
 
         _ => {}

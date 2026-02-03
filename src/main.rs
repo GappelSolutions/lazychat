@@ -30,7 +30,7 @@ struct Args {
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    let args = Args::parse();
+    let _args = Args::parse();
 
     // Setup terminal
     enable_raw_mode()?;
@@ -40,7 +40,7 @@ async fn main() -> Result<()> {
     let mut terminal = Terminal::new(backend)?;
 
     // Create app and run
-    let mut app = App::new(args.refresh);
+    let mut app = App::new();
     app.load_data().await?;
 
     let result = events::run_app(&mut terminal, &mut app).await;
