@@ -45,6 +45,10 @@ async fn main() -> Result<()> {
     let mut app = App::new();
     app.load_data().await?;
 
+    // Load presets and process registry (Phase 1 & 2)
+    let _ = app.load_presets();
+    let _ = app.load_process_registry();
+
     let result = events::run_app(&mut terminal, &mut app).await;
 
     // Restore terminal

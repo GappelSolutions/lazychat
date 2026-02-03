@@ -181,6 +181,7 @@ async fn handle_key(app: &mut App, key: KeyEvent) -> Result<bool> {
             Focus::Detail if app.diff_mode => {
                 app.jump_to_next_hunk();
             }
+            Focus::Presets => app.focus = Focus::Sessions,
             Focus::Sessions if !app.current_file_changes.is_empty() => {
                 app.focus = Focus::Files;
                 app.load_file_diff().await;
@@ -197,6 +198,11 @@ async fn handle_key(app: &mut App, key: KeyEvent) -> Result<bool> {
         // j/k = navigate within current panel (j=down, k=up)
         KeyCode::Char('j') | KeyCode::Down => {
             match app.focus {
+                Focus::Presets => {
+                    if app.selected_preset_idx + 1 < app.presets.len() {
+                        app.selected_preset_idx += 1;
+                    }
+                }
                 Focus::Sessions => app.list_next(),
                 Focus::Todos => app.todos_scroll_down(),
                 Focus::Files => {
@@ -209,6 +215,11 @@ async fn handle_key(app: &mut App, key: KeyEvent) -> Result<bool> {
         }
         KeyCode::Char('k') | KeyCode::Up => {
             match app.focus {
+                Focus::Presets => {
+                    if app.selected_preset_idx > 0 {
+                        app.selected_preset_idx -= 1;
+                    }
+                }
                 Focus::Sessions => app.list_prev(),
                 Focus::Todos => app.todos_scroll_up(),
                 Focus::Files => {
@@ -250,6 +261,9 @@ async fn handle_key(app: &mut App, key: KeyEvent) -> Result<bool> {
 
         // Enter = fullscreen detail view (from any left panel)
         KeyCode::Enter => match app.focus {
+            Focus::Presets => {
+                // TODO: Launch preset instances
+            }
             Focus::Files => {
                 app.focus = Focus::Detail;
                 app.diff_mode = true;
@@ -277,6 +291,9 @@ async fn handle_key(app: &mut App, key: KeyEvent) -> Result<bool> {
                         app.focus = Focus::Sessions;
                         app.diff_mode = false;
                     }
+                    Focus::Presets => {
+                        app.focus = Focus::Sessions;
+                    }
                     Focus::Sessions => {}
                 }
             }
@@ -284,12 +301,19 @@ async fn handle_key(app: &mut App, key: KeyEvent) -> Result<bool> {
 
         // Top/bottom
         KeyCode::Char('g') => match app.focus {
+            Focus::Presets => app.selected_preset_idx = 0,
             Focus::Sessions => app.session_list_state.select(Some(0)),
             Focus::Todos => app.todos_scroll = 0,
             Focus::Files => app.files_scroll = 0,
             Focus::Detail => app.scroll_top(),
         },
         KeyCode::Char('G') => match app.focus {
+            Focus::Presets => {
+                let len = app.presets.len();
+                if len > 0 {
+                    app.selected_preset_idx = len - 1;
+                }
+            }
             Focus::Sessions => {
                 let len = app.sessions.len();
                 if len > 0 {

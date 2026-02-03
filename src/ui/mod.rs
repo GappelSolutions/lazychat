@@ -1,4 +1,5 @@
 mod sessions;
+pub mod presets;
 
 use crate::app::{App, Focus};
 use ratatui::{
@@ -39,9 +40,9 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
             .split(chunks[0]);
 
-        // Left side: sessions + files + todos
-        let is_sessions_focused = app.focus == Focus::Sessions;
-        draw_left_panel(f, app, main_chunks[0], is_sessions_focused);
+        // Left side: presets + sessions + files + todos
+        let is_left_focused = matches!(app.focus, Focus::Presets | Focus::Sessions | Focus::Files | Focus::Todos);
+        draw_left_panel(f, app, main_chunks[0], is_left_focused);
 
         // Right side: chat or diff
         let is_detail_focused = app.focus == Focus::Detail;
@@ -57,7 +58,25 @@ pub fn draw(f: &mut Frame, app: &mut App) {
     }
 }
 
-fn draw_left_panel(f: &mut Frame, app: &mut App, area: Rect, _is_focused: bool) {
+fn draw_left_panel(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
+    // Split left panel: Presets (top) + Sessions/Files/Todos (bottom)
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([
+            Constraint::Length(8), // Presets panel (compact)
+            Constraint::Min(0),    // Sessions/Files/Todos
+        ])
+        .split(area);
+
+    // Presets panel
+    let presets_focused = focused && app.focus == Focus::Presets;
+    presets::draw_presets_panel(f, app, chunks[0], presets_focused);
+
+    // Rest of left panel: Sessions, Files, Todos
+    draw_sessions_files_todos(f, app, chunks[1], focused);
+}
+
+fn draw_sessions_files_todos(f: &mut Frame, app: &mut App, area: Rect, focused: bool) {
     // Get todos for the SELECTED session only
     let mut session_todos: Vec<(String, String, String)> = app
         .selected_session()
@@ -110,20 +129,20 @@ fn draw_left_panel(f: &mut Frame, app: &mut App, area: Rect, _is_focused: bool) 
     let mut chunk_idx = 0;
 
     // Sessions list (always shown)
-    let sessions_focused = app.focus == Focus::Sessions;
+    let sessions_focused = focused && app.focus == Focus::Sessions;
     sessions::draw_session_list(f, app, chunks[chunk_idx], sessions_focused);
     chunk_idx += 1;
 
     // Files panel (middle)
     if has_files {
-        let files_focused = app.focus == Focus::Files;
+        let files_focused = focused && app.focus == Focus::Files;
         draw_files_panel(f, app, chunks[chunk_idx], files_focused);
         chunk_idx += 1;
     }
 
     // Todos panel (bottom)
     if has_todos {
-        let todos_focused = app.focus == Focus::Todos;
+        let todos_focused = focused && app.focus == Focus::Todos;
         draw_todos_panel(
             f,
             app,
@@ -403,8 +422,11 @@ fn draw_help_bar(f: &mut Frame, app: &App, area: Rect) {
         (_, true) => {
             "j/k: scroll │ h/l: hunks │ ^u/d: page │ ^q: back │ g/G: top/bottom │ e: edit │ q: quit"
         }
+        (Focus::Presets, _) => {
+            "j/k: nav │ l: sessions │ Enter: apply preset │ ?: help │ q: quit"
+        }
         (Focus::Sessions, _) => {
-            "j/k: nav │ l: files │ Enter: view │ r: rename │ o: open │ n: new │ ?: help │ q: quit"
+            "j/k: nav │ h/l: presets/files │ Enter: view │ r: rename │ o: open │ n: new │ ?: help │ q: quit"
         }
         (Focus::Files, _) => {
             "j/k: select │ f: filter │ t: tree/flat │ Enter: view │ Esc: back │ q: quit"

@@ -1,9 +1,12 @@
 use crate::data::{claude::ClaudeData, Agent, ChatMessage, FileChange, FileStatus, Session};
 use crate::terminal::EmbeddedTerminal;
+use crate::config::presets::{Preset, PresetManager};
+use crate::process::registry::ProcessRegistry;
 use anyhow::Result;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Focus {
+    Presets,   // Left panel - preset selection
     Sessions,
     Todos,
     Files,
@@ -64,6 +67,16 @@ pub struct App {
     pub embedded_terminal: Option<EmbeddedTerminal>,
     pub terminal_mode: bool,
     pub editor_mode: bool, // True when terminal is running editor (vs claude)
+
+    // Preset management (Phase 2)
+    pub preset_manager: Option<PresetManager>,
+    pub presets: Vec<Preset>,
+    pub selected_preset_idx: usize,
+    pub preset_filter: String,
+    pub preset_filter_active: bool,
+
+    // Process registry (Phase 1)
+    pub process_registry: Option<ProcessRegistry>,
 }
 
 impl App {
@@ -101,6 +114,16 @@ impl App {
             embedded_terminal: None,
             terminal_mode: false,
             editor_mode: false,
+
+            // Preset management
+            preset_manager: None,
+            presets: Vec::new(),
+            selected_preset_idx: 0,
+            preset_filter: String::new(),
+            preset_filter_active: false,
+
+            // Process registry
+            process_registry: None,
         }
     }
 
@@ -145,6 +168,7 @@ impl App {
 
     pub fn toggle_focus(&mut self) {
         match self.focus {
+            Focus::Presets => self.focus = Focus::Detail,
             Focus::Sessions => self.focus = Focus::Detail,
             Focus::Todos => self.focus = Focus::Detail,
             Focus::Files => self.focus = Focus::Detail,
@@ -416,6 +440,11 @@ impl App {
             .and_then(|i| self.sessions.get(i))
     }
 
+    /// Get selected preset
+    pub fn selected_preset(&self) -> Option<&Preset> {
+        self.presets.get(self.selected_preset_idx)
+    }
+
     /// Get git diff info for files
     async fn get_file_changes(file_paths: &[String]) -> Vec<FileChange> {
         let mut changes = Vec::new();
@@ -573,5 +602,42 @@ impl App {
             }
         }
         // At first hunk - don't wrap, stay at beginning
+    }
+
+    pub fn load_presets(&mut self) -> Result<()> {
+        match PresetManager::load() {
+            Ok(pm) => {
+                self.presets = pm.all().to_vec();
+                self.preset_manager = Some(pm);
+            }
+            Err(e) => {
+                self.set_error(&format!("Failed to load presets: {e}"));
+            }
+        }
+        Ok(())
+    }
+
+    pub fn load_process_registry(&mut self) -> Result<()> {
+        match ProcessRegistry::load() {
+            Ok(reg) => {
+                self.process_registry = Some(reg);
+            }
+            Err(e) => {
+                self.set_error(&format!("Failed to load process registry: {e}"));
+            }
+        }
+        Ok(())
+    }
+
+    pub fn preset_next(&mut self) {
+        if !self.presets.is_empty() && self.selected_preset_idx + 1 < self.presets.len() {
+            self.selected_preset_idx += 1;
+        }
+    }
+
+    pub fn preset_prev(&mut self) {
+        if self.selected_preset_idx > 0 {
+            self.selected_preset_idx -= 1;
+        }
     }
 }
