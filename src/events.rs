@@ -343,6 +343,19 @@ async fn handle_key(app: &mut App, key: KeyEvent) -> Result<bool> {
             }
         }
 
+        // Yank (copy) file path to clipboard
+        KeyCode::Char('y') => {
+            if app.focus == Focus::Files {
+                if app.yank_file_path() {
+                    if let Some(path) = app.selected_file_path() {
+                        app.set_status(&format!("Copied: {}", path));
+                    }
+                } else {
+                    app.set_error("Failed to copy to clipboard");
+                }
+            }
+        }
+
         _ => {}
     }
 

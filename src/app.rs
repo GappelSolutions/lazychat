@@ -1,3 +1,4 @@
+use crate::config::Config;
 use crate::data::{claude::ClaudeData, Session, Agent, ChatMessage, FileChange, FileStatus};
 use crate::terminal::EmbeddedTerminal;
 use anyhow::Result;
@@ -11,6 +12,7 @@ pub enum Focus {
 }
 
 pub struct App {
+    pub config: Config,
     pub should_quit: bool,
     pub show_help: bool,
 
@@ -66,11 +68,12 @@ pub struct App {
 }
 
 impl App {
-    pub fn new() -> Self {
+    pub fn new(config: Config) -> Self {
         let mut session_list_state = ratatui::widgets::ListState::default();
         session_list_state.select(Some(0));
 
         Self {
+            config,
             should_quit: false,
             show_help: false,
             status_message: None,
@@ -238,6 +241,37 @@ impl App {
 
     pub fn toggle_file_tree_mode(&mut self) {
         self.file_tree_mode = !self.file_tree_mode;
+    }
+
+    /// Get the full path of the currently selected file
+    pub fn selected_file_path(&self) -> Option<&str> {
+        self.current_file_changes
+            .get(self.selected_file_idx)
+            .map(|f| f.path.as_str())
+    }
+
+    /// Copy the selected file's full path to clipboard
+    pub fn yank_file_path(&mut self) -> bool {
+        if let Some(path) = self.selected_file_path() {
+            use std::process::{Command, Stdio};
+            use std::io::Write;
+
+            // Use pbcopy on macOS
+            if let Ok(mut child) = Command::new("pbcopy")
+                .stdin(Stdio::piped())
+                .spawn()
+            {
+                if let Some(mut stdin) = child.stdin.take() {
+                    if stdin.write_all(path.as_bytes()).is_ok() {
+                        drop(stdin);
+                        if child.wait().is_ok() {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+        false
     }
 
     pub fn set_status(&mut self, message: &str) {

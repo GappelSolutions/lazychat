@@ -1,20 +1,61 @@
 mod sessions;
 
 use crate::app::{App, Focus};
+use crate::config::Theme;
 use ratatui::{
     prelude::*,
     widgets::{Block, Borders, Clear, Paragraph},
 };
 
-// Lazygit-style colors
+// Fallback colors when no config available
 pub const BORDER_COLOR: Color = Color::Blue;
 pub const BORDER_ACTIVE: Color = Color::Green;
 pub const MUTED: Color = Color::DarkGray;
-pub const SELECTED_BG: Color = Color::Rgb(30, 50, 80);  // Subtle blue for selection
+pub const SELECTED_BG: Color = Color::Rgb(30, 50, 80);
 pub const SUCCESS: Color = Color::Green;
 pub const WARNING: Color = Color::Yellow;
 pub const ERROR: Color = Color::Red;
 pub const INFO: Color = Color::Cyan;
+
+// Theme-aware color helpers
+pub fn border_color(theme: &Theme) -> Color {
+    theme.border()
+}
+
+pub fn border_active(theme: &Theme) -> Color {
+    theme.border_active()
+}
+
+pub fn selected_bg(theme: &Theme) -> Color {
+    theme.selected_bg()
+}
+
+pub fn status_color(theme: &Theme, status: &str) -> Color {
+    match status {
+        "working" => theme.status_working(),
+        "active" => theme.status_active(),
+        "idle" => theme.status_idle(),
+        "inactive" => theme.status_inactive(),
+        "waiting" => theme.status_waiting(),
+        _ => theme.status_inactive(),
+    }
+}
+
+pub fn diff_add(theme: &Theme) -> Color {
+    theme.diff_add()
+}
+
+pub fn diff_remove(theme: &Theme) -> Color {
+    theme.diff_remove()
+}
+
+pub fn diff_hunk(theme: &Theme) -> Color {
+    theme.diff_hunk()
+}
+
+pub fn text_muted(theme: &Theme) -> Color {
+    theme.text_muted()
+}
 
 pub fn draw(f: &mut Frame, app: &mut App) {
     let size = f.area();
@@ -56,7 +97,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 
     // Draw help popup if active
     if app.show_help {
-        draw_help_popup(f, size);
+        draw_help_popup(f, app, size);
     }
 }
 
@@ -357,12 +398,21 @@ fn draw_help_bar(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(help, area);
 }
 
-pub fn styled_block(title: &str, is_active: bool) -> Block {
+pub fn styled_block(title: &str, is_active: bool) -> Block<'static> {
     Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(if is_active { BORDER_ACTIVE } else { BORDER_COLOR }))
         .title(format!(" {} ", title))
         .title_style(Style::default().fg(if is_active { Color::Green } else { Color::White }).bold())
+}
+
+pub fn styled_block_themed(title: &str, is_active: bool, theme: &Theme) -> Block<'static> {
+    let border = if is_active { border_active(theme) } else { border_color(theme) };
+    Block::default()
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(border))
+        .title(format!(" {} ", title))
+        .title_style(Style::default().fg(if is_active { border_active(theme) } else { Color::White }).bold())
 }
 
 pub fn relative_time(dt: &Option<chrono::DateTime<chrono::Utc>>) -> String {
@@ -408,9 +458,9 @@ pub fn status_style(status: &str) -> Style {
     }
 }
 
-fn draw_help_popup(f: &mut Frame, area: Rect) {
+fn draw_help_popup(f: &mut Frame, app: &App, area: Rect) {
     let popup_width = 36.min(area.width.saturating_sub(4));
-    let popup_height = 22.min(area.height.saturating_sub(4));
+    let popup_height = 23.min(area.height.saturating_sub(4));
     let popup_area = Rect {
         x: (area.width.saturating_sub(popup_width)) / 2,
         y: (area.height.saturating_sub(popup_height)) / 2,
@@ -474,6 +524,10 @@ fn draw_help_popup(f: &mut Frame, area: Rect) {
             Span::styled("    t ", Style::default().fg(Color::Yellow)),
             Span::styled("Tree/flat", Style::default().fg(Color::Gray)),
         ]),
+        Line::from(vec![
+            Span::styled("    y ", Style::default().fg(Color::Yellow)),
+            Span::styled("Yank path", Style::default().fg(Color::Gray)),
+        ]),
         Line::from(""),
         Line::from(vec![
             Span::styled("    ? ", Style::default().fg(Color::Yellow)),
@@ -487,7 +541,7 @@ fn draw_help_popup(f: &mut Frame, area: Rect) {
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(BORDER_COLOR))
+        .border_style(Style::default().fg(border_color(&app.config.theme)))
         .title(" Help ")
         .title_style(Style::default().fg(Color::White).bold());
 
