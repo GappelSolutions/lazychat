@@ -1,4 +1,5 @@
 mod app;
+mod config;
 mod data;
 mod events;
 mod terminal;
@@ -6,6 +7,7 @@ mod ui;
 
 use anyhow::Result;
 use app::App;
+use config::Config;
 use clap::Parser;
 use crossterm::{
     event::{DisableMouseCapture, EnableMouseCapture},
@@ -39,8 +41,9 @@ async fn main() -> Result<()> {
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    // Create app and run
-    let mut app = App::new();
+    // Load config and create app
+    let config = Config::load();
+    let mut app = App::new(config);
     app.load_data().await?;
 
     let result = events::run_app(&mut terminal, &mut app).await;

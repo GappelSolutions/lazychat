@@ -4,6 +4,8 @@ A lazygit-inspired TUI for managing AI coding assistant sessions. Monitor, navig
 
 > **Note:** This is the original repo. Completely vibe-coded. Fork it, extend it, make it yours — just give credit where credit is due.
 
+> **Recommended:** Use with [oh-my-claudecode](https://github.com/Yeachan-Heo/oh-my-claudecode) for the ultimate Claude Code experience.
+
 ![Rust](https://img.shields.io/badge/rust-1.70+-orange.svg)
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 
@@ -117,7 +119,32 @@ Esc     # Go back
 
 ## Configuration
 
-Lazychat reads Claude Code data from `~/.claude/`. No additional configuration needed.
+Lazychat reads Claude Code data from `~/.claude/`.
+
+### Theme Configuration
+
+Customize colors by creating a config file at `~/.config/lazychat/config.toml` or `~/.lazychat.toml`:
+
+```toml
+[theme]
+border = "#5c6370"
+border_active = "#98c379"
+selected_bg = "#1e3250"
+
+# Status colors
+status_working = "#56b6c2"
+status_active = "#98c379"
+status_idle = "#e5c07b"
+status_inactive = "#5c6370"
+status_waiting = "#c678dd"
+
+# Diff colors
+diff_add = "#98c379"
+diff_remove = "#e06c75"
+diff_hunk = "#61afef"
+```
+
+See `config.example.toml` for preset themes (Dracula, Nord, Gruvbox, Tokyo Night).
 
 ### Real-time Status with Hooks
 

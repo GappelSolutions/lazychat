@@ -126,6 +126,12 @@ impl App {
                     .flat_map(|m| &m.tool_calls)
                     .filter_map(|tc| tc.file_path.clone())
                     .collect();
+
+                // Add .omc directory files (important project state)
+                if let Ok(omc_files) = Self::scan_omc_directory().await {
+                    file_paths.extend(omc_files);
+                }
+
                 file_paths.sort();
                 file_paths.dedup();
 
@@ -449,6 +455,37 @@ impl App {
         }
 
         (FileStatus::Modified, 0, 0)
+    }
+
+    /// Scan .omc directory for important project state files
+    async fn scan_omc_directory() -> Result<Vec<String>> {
+        let mut files = Vec::new();
+        let omc_path = std::path::Path::new(".omc");
+
+        if !omc_path.exists() {
+            return Ok(files);
+        }
+
+        // Recursively walk .omc directory
+        fn visit_dir(dir: &std::path::Path, files: &mut Vec<String>) -> std::io::Result<()> {
+            if dir.is_dir() {
+                for entry in std::fs::read_dir(dir)? {
+                    let entry = entry?;
+                    let path = entry.path();
+                    if path.is_dir() {
+                        visit_dir(&path, files)?;
+                    } else {
+                        if let Some(path_str) = path.to_str() {
+                            files.push(path_str.to_string());
+                        }
+                    }
+                }
+            }
+            Ok(())
+        }
+
+        let _ = visit_dir(omc_path, &mut files);
+        Ok(files)
     }
 
     pub async fn load_file_diff(&mut self) {

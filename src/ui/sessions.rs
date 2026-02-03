@@ -4,11 +4,11 @@ use ratatui::{
     prelude::*,
     widgets::{Block, Borders, List, ListItem, Paragraph, Scrollbar, ScrollbarOrientation, ScrollbarState},
 };
-use super::{styled_block, relative_time, truncate, MUTED, SELECTED_BG, INFO, SUCCESS, WARNING};
+use super::{styled_block_themed, relative_time, truncate, MUTED, INFO, SUCCESS, WARNING};
 
 pub fn draw_session_list(f: &mut Frame, app: &mut App, area: Rect, is_focused: bool) {
     let title = format!("Sessions ({})", app.sessions.len());
-    let block = styled_block(&title, is_focused);
+    let block = styled_block_themed(&title, is_focused, &app.config.theme);
 
     if app.sessions.is_empty() {
         let empty = Paragraph::new("No sessions found")
@@ -57,7 +57,7 @@ pub fn draw_session_list(f: &mut Frame, app: &mut App, area: Rect, is_focused: b
 }
 
 fn draw_session_list_inner(f: &mut Frame, app: &mut App, area: Rect, is_focused: bool) {
-    let block = styled_block("Sessions", is_focused);
+    let block = styled_block_themed("Sessions", is_focused, &app.config.theme);
     let max_name_width = (area.width as usize).saturating_sub(4).min(25);
 
     let items: Vec<ListItem> = app
@@ -67,14 +67,16 @@ fn draw_session_list_inner(f: &mut Frame, app: &mut App, area: Rect, is_focused:
         .map(|(i, session)| {
             let is_selected = app.session_list_state.selected() == Some(i);
 
-            // More distinct status indicators
-            let (status_char, status_color) = match session.status.as_str() {
-                "working" => ("⟳", Color::Cyan),       // Cyan spinner = actively processing (<10s)
-                "active" => ("▶", Color::Green),       // Green play = recent activity (<2 min)
-                "idle" => ("●", Color::Yellow),        // Yellow dot = waiting (2-30 min)
-                "inactive" => ("○", Color::DarkGray),  // Gray circle = old (>30 min)
-                "waiting" => ("◆", Color::Magenta),    // Magenta = waiting for user (from hook)
-                _ => ("○", Color::DarkGray),
+            // More distinct status indicators (using theme colors)
+            let theme = &app.config.theme;
+            let status_color = super::status_color(theme, &session.status);
+            let status_char = match session.status.as_str() {
+                "working" => "⟳",   // Spinner = actively processing (<10s)
+                "active" => "▶",    // Play = recent activity (<2 min)
+                "idle" => "●",       // Dot = waiting (2-30 min)
+                "inactive" => "○",   // Circle = old (>30 min)
+                "waiting" => "◆",    // Diamond = waiting for user (from hook)
+                _ => "○",
             };
 
             // Use custom_name > description > project_name
@@ -104,9 +106,10 @@ fn draw_session_list_inner(f: &mut Frame, app: &mut App, area: Rect, is_focused:
                 ),
             ]);
 
+            let selected_bg = super::selected_bg(&app.config.theme);
             ListItem::new(vec![content, time_line]).style(
                 if is_selected {
-                    Style::default().bg(SELECTED_BG)
+                    Style::default().bg(selected_bg)
                 } else {
                     Style::default()
                 }
@@ -114,9 +117,10 @@ fn draw_session_list_inner(f: &mut Frame, app: &mut App, area: Rect, is_focused:
         })
         .collect();
 
+    let selected_bg = super::selected_bg(&app.config.theme);
     let list = List::new(items)
         .block(block)
-        .highlight_style(Style::default().bg(SELECTED_BG));
+        .highlight_style(Style::default().bg(selected_bg));
 
     f.render_stateful_widget(list, area, &mut app.session_list_state);
 }
@@ -155,9 +159,10 @@ fn draw_todos_preview(f: &mut Frame, app: &mut App, area: Rect) {
         .unwrap_or_default();
 
     let title = format!("Todos ({})", todos.len());
+    let border_color = super::border_color(&app.config.theme);
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(super::BORDER_COLOR))
+        .border_style(Style::default().fg(border_color))
         .title(format!(" {} ", title))
         .title_style(Style::default().fg(Color::White).bold());
 
@@ -219,18 +224,20 @@ fn draw_diff_view(f: &mut Frame, app: &mut App, area: Rect, is_focused: bool) {
 
     // Show active border only when actually in diff_mode (entered with Enter)
     let show_active = is_focused && app.diff_mode;
+    let theme = &app.config.theme;
 
     let border_color = if show_active {
-        super::BORDER_ACTIVE
+        super::border_active(theme)
     } else {
-        super::BORDER_COLOR
+        super::border_color(theme)
     };
 
+    let active_color = super::border_active(theme);
     let block = Block::default()
         .borders(Borders::ALL)
         .border_style(Style::default().fg(border_color))
         .title(format!(" {} ", title))
-        .title_style(Style::default().fg(if show_active { Color::Green } else { Color::White }).bold());
+        .title_style(Style::default().fg(if show_active { active_color } else { Color::White }).bold());
 
     let inner = block.inner(area);
     f.render_widget(block, area);
@@ -243,21 +250,22 @@ fn draw_diff_view(f: &mut Frame, app: &mut App, area: Rect, is_focused: bool) {
         return;
     }
 
-    // Parse and colorize diff with line wrapping
+    // Parse and colorize diff with line wrapping (using theme colors)
+    let theme = &app.config.theme;
     let max_width = inner.width as usize;
     let mut lines: Vec<Line> = Vec::new();
 
     for line in app.current_diff.lines() {
         let style = if line.starts_with('+') && !line.starts_with("+++") {
-            Style::default().fg(Color::Green)
+            Style::default().fg(super::diff_add(theme))
         } else if line.starts_with('-') && !line.starts_with("---") {
-            Style::default().fg(Color::Red)
+            Style::default().fg(super::diff_remove(theme))
         } else if line.starts_with("@@") {
-            Style::default().fg(Color::Cyan)
+            Style::default().fg(super::diff_hunk(theme))
         } else if line.starts_with("diff") || line.starts_with("index") {
             Style::default().fg(Color::Yellow)
         } else {
-            Style::default().fg(Color::Gray)
+            Style::default().fg(super::text_muted(theme))
         };
 
         // Wrap long lines
@@ -411,7 +419,7 @@ fn draw_messages(f: &mut Frame, app: &mut App, area: Rect, is_focused: bool) {
         None => "Chat".to_string(),
     };
 
-    let block = styled_block(&title, is_focused);
+    let block = styled_block_themed(&title, is_focused, &app.config.theme);
     let inner = block.inner(area);
     f.render_widget(block, area);
 
