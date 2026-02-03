@@ -43,7 +43,6 @@ vt100 = "0.15"
 
 # Diff computation
 similar = "2"
-toml = "0.9.11"
 
 [profile.release]
 lto = true

@@ -94,10 +94,12 @@ Esc     # Go back
 
 ### Files
 
-| Key | Action                  |
-| --- | ----------------------- |
-| `f` | Filter files by name    |
-| `t` | Toggle tree / flat view |
+| Key | Action                            |
+| --- | --------------------------------- |
+| `e` | Edit in $EDITOR (default: nvim)   |
+| `f` | Filter files by name              |
+| `t` | Toggle tree / flat view           |
+| `y` | Yank (copy) file path             |
 
 ### General
 
@@ -119,32 +121,7 @@ Esc     # Go back
 
 ## Configuration
 
-Lazychat reads Claude Code data from `~/.claude/`.
-
-### Theme Configuration
-
-Customize colors by creating a config file at `~/.config/lazychat/config.toml` or `~/.lazychat.toml`:
-
-```toml
-[theme]
-border = "#5c6370"
-border_active = "#98c379"
-selected_bg = "#1e3250"
-
-# Status colors
-status_working = "#56b6c2"
-status_active = "#98c379"
-status_idle = "#e5c07b"
-status_inactive = "#5c6370"
-status_waiting = "#c678dd"
-
-# Diff colors
-diff_add = "#98c379"
-diff_remove = "#e06c75"
-diff_hunk = "#61afef"
-```
-
-See `config.example.toml` for preset themes (Dracula, Nord, Gruvbox, Tokyo Night).
+Lazychat reads Claude Code data from `~/.claude/`. Colors use standard terminal colors for maximum compatibility.
 
 ### Real-time Status with Hooks
 
@@ -254,18 +231,6 @@ cursor = { data_dir = "~/.cursor" }
 3. Add keybindings in `events.rs`
 4. Update help popup
 
-### Custom Themes (planned)
-
-```toml
-[theme]
-border = "#5c6370"
-border_active = "#98c379"
-selected_bg = "#3e4451"
-status_working = "#56b6c2"
-status_active = "#98c379"
-status_idle = "#e5c07b"
-```
-
 ## API Reference
 
 ### Data Structures
@@ -338,7 +303,6 @@ cargo clippy
 ### Areas for Contribution
 
 - **Multi-provider support** - Add data providers for Cursor, Copilot, etc.
-- **Custom themes** - Implement theme configuration system
 - **Plugin system** - Allow extending UI with custom panels
 - **Session management** - Archive, export, import sessions
 - **Search** - Full-text search across messages

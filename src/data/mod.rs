@@ -9,13 +9,13 @@ pub struct Session {
     pub id: String,
     pub project: String,
     pub project_name: String,
-    pub description: Option<String>,  // First user message - what the chat is about
-    pub custom_name: Option<String>,  // User-defined override name
+    pub description: Option<String>, // First user message - what the chat is about
+    pub custom_name: Option<String>, // User-defined override name
     pub started_at: Option<DateTime<Utc>>,
     pub last_activity: Option<DateTime<Utc>>,
     pub message_count: u64,
     pub status: String,
-    pub todos: Vec<TodoItem>,  // Session-specific todos
+    pub todos: Vec<TodoItem>, // Session-specific todos
     #[serde(skip)]
     pub file_path: Option<PathBuf>,
 }
@@ -69,8 +69,8 @@ pub struct HistoryEntry {
 
 #[derive(Debug, Clone)]
 pub struct ChatMessage {
-    pub role: String,           // "user" or "assistant"
-    pub content: String,        // The message text
+    pub role: String,    // "user" or "assistant"
+    pub content: String, // The message text
     pub timestamp: Option<DateTime<Utc>>,
     pub tool_calls: Vec<ToolCall>,
 }
@@ -78,7 +78,7 @@ pub struct ChatMessage {
 #[derive(Debug, Clone)]
 pub struct ToolCall {
     pub tool_name: String,
-    pub status: String,         // "running", "completed", "error"
+    pub status: String,            // "running", "completed", "error"
     pub file_path: Option<String>, // For Edit/Write tools
 }
 

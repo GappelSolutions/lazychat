@@ -1,61 +1,20 @@
 mod sessions;
 
 use crate::app::{App, Focus};
-use crate::config::Theme;
 use ratatui::{
     prelude::*,
     widgets::{Block, Borders, Clear, Paragraph},
 };
 
-// Fallback colors when no config available
+// Lazygit-style colors
 pub const BORDER_COLOR: Color = Color::Blue;
 pub const BORDER_ACTIVE: Color = Color::Green;
 pub const MUTED: Color = Color::DarkGray;
-pub const SELECTED_BG: Color = Color::Rgb(30, 50, 80);
+pub const SELECTED_BG: Color = Color::Rgb(30, 50, 80); // Subtle blue for selection
 pub const SUCCESS: Color = Color::Green;
 pub const WARNING: Color = Color::Yellow;
 pub const ERROR: Color = Color::Red;
 pub const INFO: Color = Color::Cyan;
-
-// Theme-aware color helpers
-pub fn border_color(theme: &Theme) -> Color {
-    theme.border()
-}
-
-pub fn border_active(theme: &Theme) -> Color {
-    theme.border_active()
-}
-
-pub fn selected_bg(theme: &Theme) -> Color {
-    theme.selected_bg()
-}
-
-pub fn status_color(theme: &Theme, status: &str) -> Color {
-    match status {
-        "working" => theme.status_working(),
-        "active" => theme.status_active(),
-        "idle" => theme.status_idle(),
-        "inactive" => theme.status_inactive(),
-        "waiting" => theme.status_waiting(),
-        _ => theme.status_inactive(),
-    }
-}
-
-pub fn diff_add(theme: &Theme) -> Color {
-    theme.diff_add()
-}
-
-pub fn diff_remove(theme: &Theme) -> Color {
-    theme.diff_remove()
-}
-
-pub fn diff_hunk(theme: &Theme) -> Color {
-    theme.diff_hunk()
-}
-
-pub fn text_muted(theme: &Theme) -> Color {
-    theme.text_muted()
-}
 
 pub fn draw(f: &mut Frame, app: &mut App) {
     let size = f.area();
@@ -77,10 +36,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
         // Main layout: left panel (40%) + detail (60%)
         let main_chunks = Layout::default()
             .direction(Direction::Horizontal)
-            .constraints([
-                Constraint::Percentage(40),
-                Constraint::Percentage(60),
-            ])
+            .constraints([Constraint::Percentage(40), Constraint::Percentage(60)])
             .split(chunks[0]);
 
         // Left side: sessions + files + todos
@@ -97,14 +53,20 @@ pub fn draw(f: &mut Frame, app: &mut App) {
 
     // Draw help popup if active
     if app.show_help {
-        draw_help_popup(f, app, size);
+        draw_help_popup(f, size);
     }
 }
 
 fn draw_left_panel(f: &mut Frame, app: &mut App, area: Rect, _is_focused: bool) {
     // Get todos for the SELECTED session only
-    let mut session_todos: Vec<(String, String, String)> = app.selected_session()
-        .map(|s| s.todos.iter().map(|t| (t.id.clone(), t.content.clone(), t.status.clone())).collect())
+    let mut session_todos: Vec<(String, String, String)> = app
+        .selected_session()
+        .map(|s| {
+            s.todos
+                .iter()
+                .map(|t| (t.id.clone(), t.content.clone(), t.status.clone()))
+                .collect()
+        })
         .unwrap_or_default();
 
     // Sort by state first (in_progress → pending → completed), then by ID within each state
@@ -162,11 +124,23 @@ fn draw_left_panel(f: &mut Frame, app: &mut App, area: Rect, _is_focused: bool) 
     // Todos panel (bottom)
     if has_todos {
         let todos_focused = app.focus == Focus::Todos;
-        draw_todos_panel(f, app, &session_todos_display, chunks[chunk_idx], todos_focused);
+        draw_todos_panel(
+            f,
+            app,
+            &session_todos_display,
+            chunks[chunk_idx],
+            todos_focused,
+        );
     }
 }
 
-fn draw_todos_panel(f: &mut Frame, app: &mut App, todos: &[(String, String)], area: Rect, is_focused: bool) {
+fn draw_todos_panel(
+    f: &mut Frame,
+    app: &mut App,
+    todos: &[(String, String)],
+    area: Rect,
+    is_focused: bool,
+) {
     let title = format!("Todos ({})", todos.len());
     let block = styled_block(&title, is_focused);
 
@@ -200,7 +174,11 @@ fn draw_todos_panel(f: &mut Frame, app: &mut App, todos: &[(String, String)], ar
     app.todos_scroll_max = total_lines.saturating_sub(visible_lines);
 
     let scroll_offset = app.todos_scroll.min(app.todos_scroll_max);
-    let visible: Vec<Line> = lines.into_iter().skip(scroll_offset as usize).take(visible_lines as usize).collect();
+    let visible: Vec<Line> = lines
+        .into_iter()
+        .skip(scroll_offset as usize)
+        .take(visible_lines as usize)
+        .collect();
 
     let paragraph = Paragraph::new(visible);
     f.render_widget(paragraph, inner);
@@ -213,7 +191,13 @@ fn draw_files_panel(f: &mut Frame, app: &mut App, area: Rect, is_focused: bool) 
     let title = if app.file_filter.is_empty() {
         format!("Files ({}) [{}]", total, mode_indicator)
     } else {
-        format!("Files ({}/{}) [{}] [{}]", filtered.len(), total, app.file_filter, mode_indicator)
+        format!(
+            "Files ({}/{}) [{}] [{}]",
+            filtered.len(),
+            total,
+            app.file_filter,
+            mode_indicator
+        )
     };
     let block = styled_block(&title, is_focused);
 
@@ -221,10 +205,7 @@ fn draw_files_panel(f: &mut Frame, app: &mut App, area: Rect, is_focused: bool) 
     if app.file_filter_active {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
-            .constraints([
-                Constraint::Length(3),
-                Constraint::Min(0),
-            ])
+            .constraints([Constraint::Length(3), Constraint::Min(0)])
             .split(area);
 
         let input_block = Block::default()
@@ -254,22 +235,34 @@ fn draw_files_panel(f: &mut Frame, app: &mut App, area: Rect, is_focused: bool) 
     draw_files_list_inner(f, app, &filtered, inner, is_focused);
 }
 
-fn draw_files_list(f: &mut Frame, app: &App, files: &[&crate::data::FileChange], area: Rect, is_focused: bool) {
+fn draw_files_list(
+    f: &mut Frame,
+    app: &App,
+    files: &[&crate::data::FileChange],
+    area: Rect,
+    is_focused: bool,
+) {
     let block = styled_block("", is_focused);
     let inner = block.inner(area);
     f.render_widget(block, area);
     draw_files_list_inner(f, app, files, inner, is_focused);
 }
 
-fn draw_files_list_inner(f: &mut Frame, app: &App, files: &[&crate::data::FileChange], inner: Rect, is_focused: bool) {
+fn draw_files_list_inner(
+    f: &mut Frame,
+    app: &App,
+    files: &[&crate::data::FileChange],
+    inner: Rect,
+    is_focused: bool,
+) {
     use crate::data::FileStatus;
 
     let mut lines: Vec<Line> = Vec::new();
-    let mut selected_line: usize = 0;
 
     if app.file_tree_mode {
         // Tree view: group files by directory
-        let mut sorted_files: Vec<(usize, &crate::data::FileChange)> = files.iter().enumerate().map(|(i, f)| (i, *f)).collect();
+        let mut sorted_files: Vec<(usize, &crate::data::FileChange)> =
+            files.iter().enumerate().map(|(i, f)| (i, *f)).collect();
         sorted_files.sort_by(|a, b| a.1.path.cmp(&b.1.path));
 
         let mut last_dir: Option<String> = None;
@@ -285,15 +278,15 @@ fn draw_files_list_inner(f: &mut Frame, app: &App, files: &[&crate::data::FileCh
             if last_dir.as_ref() != Some(&dir) && !dir.is_empty() {
                 lines.push(Line::from(vec![
                     Span::styled("  ", Style::default()),
-                    Span::styled(format!("{}/ ", dir), Style::default().fg(Color::Blue).bold()),
+                    Span::styled(
+                        format!("{}/ ", dir),
+                        Style::default().fg(Color::Blue).bold(),
+                    ),
                 ]));
                 last_dir = Some(dir.clone());
             }
 
             let is_selected = is_focused && *idx == app.selected_file_idx;
-            if is_selected {
-                selected_line = lines.len();
-            }
             let (icon, status_color) = match file.status {
                 FileStatus::Modified => ("M", Color::Yellow),
                 FileStatus::Added => ("A", Color::Green),
@@ -311,15 +304,25 @@ fn draw_files_list_inner(f: &mut Frame, app: &App, files: &[&crate::data::FileCh
                 Span::styled(indent, Style::default()),
                 Span::styled(
                     truncate(&file.filename, max_name),
-                    if is_selected { Style::default().fg(Color::White).bold() } else { Style::default().fg(Color::Gray) },
+                    if is_selected {
+                        Style::default().fg(Color::White).bold()
+                    } else {
+                        Style::default().fg(Color::Gray)
+                    },
                 ),
             ];
 
             if file.additions > 0 {
-                spans.push(Span::styled(format!(" +{}", file.additions), Style::default().fg(Color::Rgb(100, 180, 100))));
+                spans.push(Span::styled(
+                    format!(" +{}", file.additions),
+                    Style::default().fg(Color::Rgb(100, 180, 100)),
+                ));
             }
             if file.deletions > 0 {
-                spans.push(Span::styled(format!(" -{}", file.deletions), Style::default().fg(Color::Rgb(180, 100, 100))));
+                spans.push(Span::styled(
+                    format!(" -{}", file.deletions),
+                    Style::default().fg(Color::Rgb(180, 100, 100)),
+                ));
             }
 
             let line = Line::from(spans);
@@ -333,9 +336,6 @@ fn draw_files_list_inner(f: &mut Frame, app: &App, files: &[&crate::data::FileCh
         // Flat view: simple list of filenames
         for (idx, file) in files.iter().enumerate() {
             let is_selected = is_focused && idx == app.selected_file_idx;
-            if is_selected {
-                selected_line = lines.len();
-            }
             let (icon, status_color) = match file.status {
                 FileStatus::Modified => ("M", Color::Yellow),
                 FileStatus::Added => ("A", Color::Green),
@@ -351,15 +351,25 @@ fn draw_files_list_inner(f: &mut Frame, app: &App, files: &[&crate::data::FileCh
                 Span::raw(" "),
                 Span::styled(
                     truncate(&file.filename, max_name),
-                    if is_selected { Style::default().fg(Color::White).bold() } else { Style::default().fg(Color::Gray) },
+                    if is_selected {
+                        Style::default().fg(Color::White).bold()
+                    } else {
+                        Style::default().fg(Color::Gray)
+                    },
                 ),
             ];
 
             if file.additions > 0 {
-                spans.push(Span::styled(format!(" +{}", file.additions), Style::default().fg(Color::Rgb(100, 180, 100))));
+                spans.push(Span::styled(
+                    format!(" +{}", file.additions),
+                    Style::default().fg(Color::Rgb(100, 180, 100)),
+                ));
             }
             if file.deletions > 0 {
-                spans.push(Span::styled(format!(" -{}", file.deletions), Style::default().fg(Color::Rgb(180, 100, 100))));
+                spans.push(Span::styled(
+                    format!(" -{}", file.deletions),
+                    Style::default().fg(Color::Rgb(180, 100, 100)),
+                ));
             }
 
             let line = Line::from(spans);
@@ -371,15 +381,7 @@ fn draw_files_list_inner(f: &mut Frame, app: &App, files: &[&crate::data::FileCh
         }
     }
 
-    // Calculate scroll to keep selected item visible
-    let visible_height = inner.height as usize;
-    let scroll = if selected_line >= visible_height {
-        (selected_line - visible_height + 1) as u16
-    } else {
-        0
-    };
-
-    let paragraph = Paragraph::new(lines).scroll((scroll, 0));
+    let paragraph = Paragraph::new(lines);
     f.render_widget(paragraph, inner);
 }
 
@@ -398,12 +400,20 @@ fn draw_help_bar(f: &mut Frame, app: &App, area: Rect) {
     }
 
     let help_text = match (app.focus, app.fullscreen) {
-        (_, true) => "j/k: scroll │ h/l: hunks │ ^u/d: page │ ^f/Esc: exit │ g/G: top/bottom │ q: quit",
-        (Focus::Sessions, _) => "j/k: nav │ l: files │ Enter: view │ r: rename │ o: open │ n: new │ ?: help │ q: quit",
-        (Focus::Files, _) => "j/k: select │ f: filter │ t: tree/flat │ Enter: view │ Esc: back │ q: quit",
+        (_, true) => {
+            "j/k: scroll │ h/l: hunks │ ^u/d: page │ ^q: back │ g/G: top/bottom │ e: edit │ q: quit"
+        }
+        (Focus::Sessions, _) => {
+            "j/k: nav │ l: files │ Enter: view │ r: rename │ o: open │ n: new │ ?: help │ q: quit"
+        }
+        (Focus::Files, _) => {
+            "j/k: select │ f: filter │ t: tree/flat │ Enter: view │ Esc: back │ q: quit"
+        }
         (Focus::Todos, _) => "j/k: scroll │ h: files │ Enter: view │ Esc: back │ ?: help │ q: quit",
-        (Focus::Detail, _) if app.diff_mode => "j/k: scroll │ h/l: hunks │ ^u/d: page │ Esc: back │ q: quit",
-        (Focus::Detail, _) => "j/k: scroll │ ^u/d: page │ Esc: back │ g/G: top/bottom │ q: quit",
+        (Focus::Detail, _) if app.diff_mode => {
+            "j/k: scroll │ h/l: hunks │ ^u/d: page │ ^q: back │ e: edit │ q: quit"
+        }
+        (Focus::Detail, _) => "j/k: scroll │ ^u/d: page │ ^q: back │ g/G: top/bottom │ q: quit",
     };
 
     let help = Paragraph::new(help_text)
@@ -413,21 +423,24 @@ fn draw_help_bar(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(help, area);
 }
 
-pub fn styled_block(title: &str, is_active: bool) -> Block<'static> {
+pub fn styled_block(title: &str, is_active: bool) -> Block {
     Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(if is_active { BORDER_ACTIVE } else { BORDER_COLOR }))
+        .border_style(Style::default().fg(if is_active {
+            BORDER_ACTIVE
+        } else {
+            BORDER_COLOR
+        }))
         .title(format!(" {} ", title))
-        .title_style(Style::default().fg(if is_active { Color::Green } else { Color::White }).bold())
-}
-
-pub fn styled_block_themed(title: &str, is_active: bool, theme: &Theme) -> Block<'static> {
-    let border = if is_active { border_active(theme) } else { border_color(theme) };
-    Block::default()
-        .borders(Borders::ALL)
-        .border_style(Style::default().fg(border))
-        .title(format!(" {} ", title))
-        .title_style(Style::default().fg(if is_active { border_active(theme) } else { Color::White }).bold())
+        .title_style(
+            Style::default()
+                .fg(if is_active {
+                    Color::Green
+                } else {
+                    Color::White
+                })
+                .bold(),
+        )
 }
 
 pub fn relative_time(dt: &Option<chrono::DateTime<chrono::Utc>>) -> String {
@@ -473,9 +486,9 @@ pub fn status_style(status: &str) -> Style {
     }
 }
 
-fn draw_help_popup(f: &mut Frame, app: &App, area: Rect) {
+fn draw_help_popup(f: &mut Frame, area: Rect) {
     let popup_width = 36.min(area.width.saturating_sub(4));
-    let popup_height = 23.min(area.height.saturating_sub(4));
+    let popup_height = 24.min(area.height.saturating_sub(4));
     let popup_area = Rect {
         x: (area.width.saturating_sub(popup_width)) / 2,
         y: (area.height.saturating_sub(popup_height)) / 2,
@@ -486,14 +499,20 @@ fn draw_help_popup(f: &mut Frame, app: &App, area: Rect) {
     f.render_widget(Clear, popup_area);
 
     let help_content = vec![
-        Line::from(Span::styled("─ Navigation", Style::default().fg(INFO).bold())),
+        Line::from(Span::styled(
+            "─ Navigation",
+            Style::default().fg(INFO).bold(),
+        )),
         Line::from(vec![
             Span::styled("  j/k ", Style::default().fg(Color::Yellow)),
             Span::styled("Move down/up", Style::default().fg(Color::Gray)),
         ]),
         Line::from(vec![
             Span::styled("  h/l ", Style::default().fg(Color::Yellow)),
-            Span::styled("Switch panels / Jump hunks", Style::default().fg(Color::Gray)),
+            Span::styled(
+                "Switch panels / Jump hunks",
+                Style::default().fg(Color::Gray),
+            ),
         ]),
         Line::from(vec![
             Span::styled("  g/G ", Style::default().fg(Color::Yellow)),
@@ -532,6 +551,10 @@ fn draw_help_popup(f: &mut Frame, app: &App, area: Rect) {
         Line::from(""),
         Line::from(Span::styled("─ Files", Style::default().fg(INFO).bold())),
         Line::from(vec![
+            Span::styled("    e ", Style::default().fg(Color::Yellow)),
+            Span::styled("Edit in $EDITOR", Style::default().fg(Color::Gray)),
+        ]),
+        Line::from(vec![
             Span::styled("    f ", Style::default().fg(Color::Yellow)),
             Span::styled("Filter", Style::default().fg(Color::Gray)),
         ]),
@@ -556,7 +579,7 @@ fn draw_help_popup(f: &mut Frame, app: &App, area: Rect) {
 
     let block = Block::default()
         .borders(Borders::ALL)
-        .border_style(Style::default().fg(border_color(&app.config.theme)))
+        .border_style(Style::default().fg(BORDER_COLOR))
         .title(" Help ")
         .title_style(Style::default().fg(Color::White).bold());
 

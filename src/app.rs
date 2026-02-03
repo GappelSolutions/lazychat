@@ -1,5 +1,4 @@
-use crate::config::Config;
-use crate::data::{claude::ClaudeData, Session, Agent, ChatMessage, FileChange, FileStatus};
+use crate::data::{claude::ClaudeData, Agent, ChatMessage, FileChange, FileStatus, Session};
 use crate::terminal::EmbeddedTerminal;
 use anyhow::Result;
 
@@ -12,7 +11,6 @@ pub enum Focus {
 }
 
 pub struct App {
-    pub config: Config,
     pub should_quit: bool,
     pub show_help: bool,
 
@@ -60,20 +58,20 @@ pub struct App {
     // File filter
     pub file_filter_active: bool,
     pub file_filter: String,
-    pub file_tree_mode: bool,  // Toggle between flat list and tree view
+    pub file_tree_mode: bool, // Toggle between flat list and tree view
 
     // Embedded terminal for Claude sessions
     pub embedded_terminal: Option<EmbeddedTerminal>,
     pub terminal_mode: bool,
+    pub editor_mode: bool, // True when terminal is running editor (vs claude)
 }
 
 impl App {
-    pub fn new(config: Config) -> Self {
+    pub fn new() -> Self {
         let mut session_list_state = ratatui::widgets::ListState::default();
         session_list_state.select(Some(0));
 
         Self {
-            config,
             should_quit: false,
             show_help: false,
             status_message: None,
@@ -99,9 +97,10 @@ impl App {
             rename_buffer: String::new(),
             file_filter_active: false,
             file_filter: String::new(),
-            file_tree_mode: true,  // Default to tree view
+            file_tree_mode: true, // Default to tree view
             embedded_terminal: None,
             terminal_mode: false,
+            editor_mode: false,
         }
     }
 
@@ -121,17 +120,12 @@ impl App {
                 self.chat_scroll = 0;
 
                 // Extract unique edited files from tool calls
-                let mut file_paths: Vec<String> = self.current_messages
+                let mut file_paths: Vec<String> = self
+                    .current_messages
                     .iter()
                     .flat_map(|m| &m.tool_calls)
                     .filter_map(|tc| tc.file_path.clone())
                     .collect();
-
-                // Add .omc directory files (important project state)
-                if let Ok(omc_files) = Self::scan_omc_directory().await {
-                    file_paths.extend(omc_files);
-                }
-
                 file_paths.sort();
                 file_paths.dedup();
 
@@ -141,18 +135,24 @@ impl App {
                 self.current_diff = String::new();
                 self.files_scroll = 0;
                 self.todos_scroll = 0;
+
+                // Reset diff mode when switching sessions - show chat view
+                self.diff_mode = false;
             }
         }
         Ok(())
     }
 
     pub fn toggle_focus(&mut self) {
-        self.focus = match self.focus {
-            Focus::Sessions => Focus::Detail,
-            Focus::Todos => Focus::Detail,
-            Focus::Files => Focus::Detail,
-            Focus::Detail => Focus::Sessions,
-        };
+        match self.focus {
+            Focus::Sessions => self.focus = Focus::Detail,
+            Focus::Todos => self.focus = Focus::Detail,
+            Focus::Files => self.focus = Focus::Detail,
+            Focus::Detail => {
+                self.focus = Focus::Sessions;
+                self.diff_mode = false;
+            }
+        }
     }
 
     pub fn selected_session_todos_count(&self) -> usize {
@@ -177,7 +177,9 @@ impl App {
 
     pub fn start_rename(&mut self) {
         if let Some(session) = self.selected_session() {
-            self.rename_buffer = session.custom_name.clone()
+            self.rename_buffer = session
+                .custom_name
+                .clone()
                 .or_else(|| session.description.clone())
                 .unwrap_or_default();
             self.renaming = true;
@@ -239,8 +241,10 @@ impl App {
             let filter_lower = self.file_filter.to_lowercase();
             self.current_file_changes
                 .iter()
-                .filter(|f| f.filename.to_lowercase().contains(&filter_lower)
-                         || f.path.to_lowercase().contains(&filter_lower))
+                .filter(|f| {
+                    f.filename.to_lowercase().contains(&filter_lower)
+                        || f.path.to_lowercase().contains(&filter_lower)
+                })
                 .collect()
         }
     }
@@ -259,14 +263,11 @@ impl App {
     /// Copy the selected file's full path to clipboard
     pub fn yank_file_path(&mut self) -> bool {
         if let Some(path) = self.selected_file_path() {
-            use std::process::{Command, Stdio};
             use std::io::Write;
+            use std::process::{Command, Stdio};
 
             // Use pbcopy on macOS
-            if let Ok(mut child) = Command::new("pbcopy")
-                .stdin(Stdio::piped())
-                .spawn()
-            {
+            if let Ok(mut child) = Command::new("pbcopy").stdin(Stdio::piped()).spawn() {
                 if let Some(mut stdin) = child.stdin.take() {
                     if stdin.write_all(path.as_bytes()).is_ok() {
                         drop(stdin);
@@ -360,12 +361,38 @@ impl App {
         Ok(())
     }
 
+    pub fn open_editor(&mut self, cols: u16, rows: u16) -> anyhow::Result<()> {
+        if self.current_file_changes.is_empty() {
+            return Ok(());
+        }
+
+        // Get the currently selected file path
+        let file_path = &self.current_file_changes[self.selected_file_idx].path;
+
+        let mut terminal = EmbeddedTerminal::new(cols, rows)?;
+        terminal.spawn_editor(file_path)?;
+        self.embedded_terminal = Some(terminal);
+        self.terminal_mode = true;
+        self.editor_mode = true;
+        self.focus = Focus::Detail;
+        self.fullscreen = true;
+        Ok(())
+    }
+
     pub fn close_embedded_terminal(&mut self) {
         if let Some(ref mut term) = self.embedded_terminal {
             term.stop();
         }
         self.embedded_terminal = None;
         self.terminal_mode = false;
+
+        // If we were in editor mode, return to diff view (not fullscreen)
+        if self.editor_mode {
+            self.editor_mode = false;
+            self.fullscreen = false;
+            self.diff_mode = true;
+            self.focus = Focus::Files;
+        }
     }
 
     pub fn send_to_terminal(&mut self, data: &[u8]) -> anyhow::Result<()> {
@@ -384,7 +411,9 @@ impl App {
 
     /// Get selected session
     pub fn selected_session(&self) -> Option<&Session> {
-        self.session_list_state.selected().and_then(|i| self.sessions.get(i))
+        self.session_list_state
+            .selected()
+            .and_then(|i| self.sessions.get(i))
     }
 
     /// Get git diff info for files
@@ -457,47 +486,6 @@ impl App {
         (FileStatus::Modified, 0, 0)
     }
 
-    /// Scan .omc directory for important project state files
-    /// Excludes: sessions, checkpoints, state directories
-    async fn scan_omc_directory() -> Result<Vec<String>> {
-        let mut files = Vec::new();
-        let omc_path = std::path::Path::new(".omc");
-
-        if !omc_path.exists() {
-            return Ok(files);
-        }
-
-        // Directories to skip
-        const SKIP_DIRS: &[&str] = &["sessions", "checkpoints", "state"];
-
-        // Recursively walk .omc directory
-        fn visit_dir(dir: &std::path::Path, files: &mut Vec<String>) -> std::io::Result<()> {
-            if dir.is_dir() {
-                for entry in std::fs::read_dir(dir)? {
-                    let entry = entry?;
-                    let path = entry.path();
-                    if path.is_dir() {
-                        // Skip excluded directories
-                        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                            if SKIP_DIRS.contains(&name) {
-                                continue;
-                            }
-                        }
-                        visit_dir(&path, files)?;
-                    } else {
-                        if let Some(path_str) = path.to_str() {
-                            files.push(path_str.to_string());
-                        }
-                    }
-                }
-            }
-            Ok(())
-        }
-
-        let _ = visit_dir(omc_path, &mut files);
-        Ok(files)
-    }
-
     pub async fn load_file_diff(&mut self) {
         if let Some(file) = self.current_file_changes.get(self.selected_file_idx) {
             use tokio::process::Command;
@@ -522,10 +510,10 @@ impl App {
     }
 
     pub fn files_select_next(&mut self) {
-        if !self.current_file_changes.is_empty() {
-            if self.selected_file_idx + 1 < self.current_file_changes.len() {
-                self.selected_file_idx += 1;
-            }
+        if !self.current_file_changes.is_empty()
+            && self.selected_file_idx + 1 < self.current_file_changes.len()
+        {
+            self.selected_file_idx += 1;
         }
     }
 
@@ -537,7 +525,8 @@ impl App {
 
     /// Jump to next diff hunk (@@)
     pub fn jump_to_next_hunk(&mut self) {
-        let hunk_positions: Vec<usize> = self.current_diff
+        let hunk_positions: Vec<usize> = self
+            .current_diff
             .lines()
             .enumerate()
             .filter(|(_, line)| line.starts_with("@@"))
@@ -562,7 +551,8 @@ impl App {
 
     /// Jump to previous diff hunk (@@)
     pub fn jump_to_prev_hunk(&mut self) {
-        let hunk_positions: Vec<usize> = self.current_diff
+        let hunk_positions: Vec<usize> = self
+            .current_diff
             .lines()
             .enumerate()
             .filter(|(_, line)| line.starts_with("@@"))
@@ -584,5 +574,4 @@ impl App {
         }
         // At first hunk - don't wrap, stay at beginning
     }
-
 }

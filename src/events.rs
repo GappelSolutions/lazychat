@@ -11,7 +11,9 @@ fn key_to_bytes(key: KeyEvent) -> Vec<u8> {
 
     match key.code {
         KeyCode::Char(c) if ctrl => {
-            let ctrl_code = (c.to_ascii_lowercase() as u8).wrapping_sub(b'a').wrapping_add(1);
+            let ctrl_code = (c.to_ascii_lowercase() as u8)
+                .wrapping_sub(b'a')
+                .wrapping_add(1);
             vec![ctrl_code]
         }
         KeyCode::Char(c) => c.to_string().into_bytes(),
@@ -72,9 +74,7 @@ async fn handle_key(app: &mut App, key: KeyEvent) -> Result<bool> {
     if app.terminal_mode {
         let exit_keys = matches!(
             (key.code, key.modifiers.contains(KeyModifiers::CONTROL)),
-            (KeyCode::Char('\\'), true) |
-            (KeyCode::Char(']'), true) |
-            (KeyCode::Char('q'), true)
+            (KeyCode::Char('\\'), true) | (KeyCode::Char(']'), true) | (KeyCode::Char('q'), true)
         );
 
         if exit_keys {
@@ -133,6 +133,19 @@ async fn handle_key(app: &mut App, key: KeyEvent) -> Result<bool> {
 
     // Normal mode
     match key.code {
+        // Ctrl+Q = fully exit detail view back to sidebar (must be before regular 'q')
+        KeyCode::Char('q') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            if app.focus == Focus::Detail || app.fullscreen {
+                app.fullscreen = false;
+                if app.diff_mode {
+                    app.diff_mode = false;
+                    app.focus = Focus::Files;
+                } else {
+                    app.focus = Focus::Sessions;
+                }
+            }
+        }
+
         // Quit
         KeyCode::Char('q') => {
             app.should_quit = true;
@@ -147,37 +160,39 @@ async fn handle_key(app: &mut App, key: KeyEvent) -> Result<bool> {
         KeyCode::Tab | KeyCode::BackTab => app.toggle_focus(),
 
         // h = go UP in left sidebar, or previous hunk in diff mode
-        KeyCode::Char('h') => {
-            match app.focus {
-                Focus::Detail if app.diff_mode => {
-                    app.jump_to_prev_hunk();
-                }
-                Focus::Todos if !app.current_file_changes.is_empty() => app.focus = Focus::Files,
-                Focus::Todos => app.focus = Focus::Sessions,
-                Focus::Files => app.focus = Focus::Sessions,
-                _ => {}
+        KeyCode::Char('h') => match app.focus {
+            Focus::Detail if app.diff_mode => {
+                app.jump_to_prev_hunk();
             }
-        }
+            Focus::Todos if !app.current_file_changes.is_empty() => app.focus = Focus::Files,
+            Focus::Todos => {
+                app.focus = Focus::Sessions;
+                app.diff_mode = false;
+            }
+            Focus::Files => {
+                app.focus = Focus::Sessions;
+                app.diff_mode = false;
+            }
+            _ => {}
+        },
 
         // l = go DOWN in left sidebar, or next hunk in diff mode
-        KeyCode::Char('l') => {
-            match app.focus {
-                Focus::Detail if app.diff_mode => {
-                    app.jump_to_next_hunk();
-                }
-                Focus::Sessions if !app.current_file_changes.is_empty() => {
-                    app.focus = Focus::Files;
-                    app.load_file_diff().await;
-                }
-                Focus::Sessions if app.selected_session_todos_count() > 0 => {
-                    app.focus = Focus::Todos;
-                }
-                Focus::Files if app.selected_session_todos_count() > 0 => {
-                    app.focus = Focus::Todos;
-                }
-                _ => {}
+        KeyCode::Char('l') => match app.focus {
+            Focus::Detail if app.diff_mode => {
+                app.jump_to_next_hunk();
             }
-        }
+            Focus::Sessions if !app.current_file_changes.is_empty() => {
+                app.focus = Focus::Files;
+                app.load_file_diff().await;
+            }
+            Focus::Sessions if app.selected_session_todos_count() > 0 => {
+                app.focus = Focus::Todos;
+            }
+            Focus::Files if app.selected_session_todos_count() > 0 => {
+                app.focus = Focus::Todos;
+            }
+            _ => {}
+        },
 
         // j/k = navigate within current panel (j=down, k=up)
         KeyCode::Char('j') | KeyCode::Down => {
@@ -188,8 +203,8 @@ async fn handle_key(app: &mut App, key: KeyEvent) -> Result<bool> {
                     app.files_select_next();
                     app.load_file_diff().await;
                 }
-                Focus::Detail if app.diff_mode => app.scroll_up(),   // diff: scroll_up = view moves down
-                Focus::Detail => app.scroll_down(),                   // chat: scroll_down = view moves down
+                Focus::Detail if app.diff_mode => app.scroll_up(), // diff: scroll_up = view moves down
+                Focus::Detail => app.scroll_down(), // chat: scroll_down = view moves down
             }
         }
         KeyCode::Char('k') | KeyCode::Up => {
@@ -201,7 +216,7 @@ async fn handle_key(app: &mut App, key: KeyEvent) -> Result<bool> {
                     app.load_file_diff().await;
                 }
                 Focus::Detail if app.diff_mode => app.scroll_down(), // diff: scroll_down = view moves up
-                Focus::Detail => app.scroll_up(),                     // chat: scroll_up = view moves up
+                Focus::Detail => app.scroll_up(), // chat: scroll_up = view moves up
             }
         }
 
@@ -234,21 +249,19 @@ async fn handle_key(app: &mut App, key: KeyEvent) -> Result<bool> {
         }
 
         // Enter = fullscreen detail view (from any left panel)
-        KeyCode::Enter => {
-            match app.focus {
-                Focus::Files => {
-                    app.focus = Focus::Detail;
-                    app.diff_mode = true;
-                    app.fullscreen = true;
-                }
-                Focus::Sessions | Focus::Todos => {
-                    app.focus = Focus::Detail;
-                    app.diff_mode = false;
-                    app.fullscreen = true;
-                }
-                Focus::Detail => {}
+        KeyCode::Enter => match app.focus {
+            Focus::Files => {
+                app.focus = Focus::Detail;
+                app.diff_mode = true;
+                app.fullscreen = true;
             }
-        }
+            Focus::Sessions | Focus::Todos => {
+                app.focus = Focus::Detail;
+                app.diff_mode = false;
+                app.fullscreen = true;
+            }
+            Focus::Detail => {}
+        },
 
         // Esc = exit fullscreen first, then go back
         KeyCode::Esc => {
@@ -260,35 +273,33 @@ async fn handle_key(app: &mut App, key: KeyEvent) -> Result<bool> {
                         app.focus = Focus::Files;
                         app.diff_mode = false;
                     }
-                    Focus::Detail | Focus::Todos | Focus::Files => app.focus = Focus::Sessions,
+                    Focus::Detail | Focus::Todos | Focus::Files => {
+                        app.focus = Focus::Sessions;
+                        app.diff_mode = false;
+                    }
                     Focus::Sessions => {}
                 }
             }
         }
 
-
         // Top/bottom
-        KeyCode::Char('g') => {
-            match app.focus {
-                Focus::Sessions => app.session_list_state.select(Some(0)),
-                Focus::Todos => app.todos_scroll = 0,
-                Focus::Files => app.files_scroll = 0,
-                Focus::Detail => app.scroll_top(),
-            }
-        }
-        KeyCode::Char('G') => {
-            match app.focus {
-                Focus::Sessions => {
-                    let len = app.sessions.len();
-                    if len > 0 {
-                        app.session_list_state.select(Some(len - 1));
-                    }
+        KeyCode::Char('g') => match app.focus {
+            Focus::Sessions => app.session_list_state.select(Some(0)),
+            Focus::Todos => app.todos_scroll = 0,
+            Focus::Files => app.files_scroll = 0,
+            Focus::Detail => app.scroll_top(),
+        },
+        KeyCode::Char('G') => match app.focus {
+            Focus::Sessions => {
+                let len = app.sessions.len();
+                if len > 0 {
+                    app.session_list_state.select(Some(len - 1));
                 }
-                Focus::Todos => app.todos_scroll = app.todos_scroll_max,
-                Focus::Files => app.files_scroll = app.files_scroll_max,
-                Focus::Detail => app.scroll_bottom(),
             }
-        }
+            Focus::Todos => app.todos_scroll = app.todos_scroll_max,
+            Focus::Files => app.files_scroll = app.files_scroll_max,
+            Focus::Detail => app.scroll_bottom(),
+        },
 
         // Open session in embedded terminal (only from Sessions panel)
         KeyCode::Char('o') => {
@@ -305,12 +316,10 @@ async fn handle_key(app: &mut App, key: KeyEvent) -> Result<bool> {
         }
 
         // New session
-        KeyCode::Char('n') => {
-            match app.open_new_embedded_terminal(80, 24) {
-                Ok(_) => app.set_status("Starting new Claude... (Ctrl+q to exit)"),
-                Err(e) => app.set_error(&format!("Failed: {}", e)),
-            }
-        }
+        KeyCode::Char('n') => match app.open_new_embedded_terminal(80, 24) {
+            Ok(_) => app.set_status("Starting new Claude... (Ctrl+q to exit)"),
+            Err(e) => app.set_error(&format!("Failed: {}", e)),
+        },
 
         // Ctrl+F = exit fullscreen (Enter to enter)
         KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -352,6 +361,21 @@ async fn handle_key(app: &mut App, key: KeyEvent) -> Result<bool> {
                     }
                 } else {
                     app.set_error("Failed to copy to clipboard");
+                }
+            }
+        }
+
+        // Edit file in $EDITOR (default: nvim) - works from Files panel or diff view
+        KeyCode::Char('e') => {
+            let can_edit = (app.focus == Focus::Files
+                || (app.focus == Focus::Detail && app.diff_mode))
+                && !app.current_file_changes.is_empty();
+            if can_edit {
+                // Get terminal size from crossterm
+                let (cols, rows) = crossterm::terminal::size().unwrap_or((80, 24));
+                match app.open_editor(cols, rows) {
+                    Ok(_) => app.set_status("Opening editor... (Ctrl+q to exit)"),
+                    Err(e) => app.set_error(&format!("Failed: {e}")),
                 }
             }
         }

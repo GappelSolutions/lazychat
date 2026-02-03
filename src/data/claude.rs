@@ -13,9 +13,7 @@ pub struct ClaudeData {
 
 impl ClaudeData {
     pub fn claude_dir() -> PathBuf {
-        dirs::home_dir()
-            .unwrap_or_default()
-            .join(".claude")
+        dirs::home_dir().unwrap_or_default().join(".claude")
     }
 
     pub async fn load() -> Result<Self> {
@@ -28,7 +26,9 @@ impl ClaudeData {
         let history = Self::load_history(&claude_dir).await.unwrap_or_default();
 
         // Load tasks from ~/.claude/tasks/{sessionId}/*.json
-        let tasks_by_session = Self::load_tasks_by_session(&claude_dir).await.unwrap_or_default();
+        let tasks_by_session = Self::load_tasks_by_session(&claude_dir)
+            .await
+            .unwrap_or_default();
 
         // Populate todos and descriptions into each session
         for session in &mut sessions {
@@ -52,14 +52,13 @@ impl ClaudeData {
             }
         }
 
-        Ok(Self {
-            sessions,
-            agents,
-        })
+        Ok(Self { sessions, agents })
     }
 
     /// Load tasks from ~/.claude/tasks/{sessionId}/*.json
-    async fn load_tasks_by_session(claude_dir: &PathBuf) -> Result<HashMap<String, Vec<TodoItem>>> {
+    async fn load_tasks_by_session(
+        claude_dir: &std::path::Path,
+    ) -> Result<HashMap<String, Vec<TodoItem>>> {
         let tasks_dir = claude_dir.join("tasks");
         let mut tasks_map: HashMap<String, Vec<TodoItem>> = HashMap::new();
 
@@ -93,15 +92,18 @@ impl ClaudeData {
 
                 if let Ok(content) = fs::read_to_string(&task_path).await {
                     if let Ok(task_data) = serde_json::from_str::<Value>(&content) {
-                        let subject = task_data.get("subject")
+                        let subject = task_data
+                            .get("subject")
                             .and_then(|v| v.as_str())
                             .unwrap_or("")
                             .to_string();
-                        let status = task_data.get("status")
+                        let status = task_data
+                            .get("status")
                             .and_then(|v| v.as_str())
                             .unwrap_or("pending")
                             .to_string();
-                        let id = task_data.get("id")
+                        let id = task_data
+                            .get("id")
                             .and_then(|v| v.as_str())
                             .unwrap_or("")
                             .to_string();
@@ -126,7 +128,7 @@ impl ClaudeData {
     }
 
     /// Load history.jsonl to extract first user messages per session
-    async fn load_history(claude_dir: &PathBuf) -> Result<HashMap<String, String>> {
+    async fn load_history(claude_dir: &std::path::Path) -> Result<HashMap<String, String>> {
         let history_file = claude_dir.join("history.jsonl");
         let mut descriptions: HashMap<String, String> = HashMap::new();
 
@@ -138,7 +140,8 @@ impl ClaudeData {
 
         for line in content.lines() {
             if let Ok(json) = serde_json::from_str::<Value>(line) {
-                let session_id = json.get("sessionId")
+                let session_id = json
+                    .get("sessionId")
                     .and_then(|v| v.as_str())
                     .unwrap_or("")
                     .to_string();
@@ -190,18 +193,25 @@ impl ClaudeData {
                 match msg_type {
                     "user" => {
                         if let Some(msg) = json.get("message") {
-                            let content = msg.get("content")
+                            let content = msg
+                                .get("content")
                                 .and_then(|c| {
                                     if c.is_string() {
                                         c.as_str().map(|s| s.to_string())
                                     } else if c.is_array() {
                                         // Handle array of content blocks
-                                        let parts: Vec<String> = c.as_array()
+                                        let parts: Vec<String> = c
+                                            .as_array()
                                             .unwrap_or(&vec![])
                                             .iter()
                                             .filter_map(|block| {
-                                                if block.get("type").and_then(|t| t.as_str()) == Some("text") {
-                                                    block.get("text").and_then(|t| t.as_str()).map(|s| s.to_string())
+                                                if block.get("type").and_then(|t| t.as_str())
+                                                    == Some("text")
+                                                {
+                                                    block
+                                                        .get("text")
+                                                        .and_then(|t| t.as_str())
+                                                        .map(|s| s.to_string())
                                                 } else {
                                                     None
                                                 }
@@ -214,7 +224,8 @@ impl ClaudeData {
                                 })
                                 .unwrap_or_default();
 
-                            let timestamp = json.get("timestamp")
+                            let timestamp = json
+                                .get("timestamp")
                                 .and_then(|t| t.as_str())
                                 .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
                                 .map(|dt| dt.with_timezone(&Utc));
@@ -234,13 +245,18 @@ impl ClaudeData {
                             let mut content = String::new();
                             let mut tool_calls = Vec::new();
 
-                            if let Some(content_array) = msg.get("content").and_then(|c| c.as_array()) {
+                            if let Some(content_array) =
+                                msg.get("content").and_then(|c| c.as_array())
+                            {
                                 for block in content_array {
-                                    let block_type = block.get("type").and_then(|t| t.as_str()).unwrap_or("");
+                                    let block_type =
+                                        block.get("type").and_then(|t| t.as_str()).unwrap_or("");
 
                                     match block_type {
                                         "text" => {
-                                            if let Some(text) = block.get("text").and_then(|t| t.as_str()) {
+                                            if let Some(text) =
+                                                block.get("text").and_then(|t| t.as_str())
+                                            {
                                                 if !content.is_empty() {
                                                     content.push('\n');
                                                 }
@@ -248,29 +264,37 @@ impl ClaudeData {
                                             }
                                         }
                                         "thinking" => {
-                                            if let Some(thinking) = block.get("thinking").and_then(|t| t.as_str()) {
+                                            if let Some(thinking) =
+                                                block.get("thinking").and_then(|t| t.as_str())
+                                            {
                                                 if !content.is_empty() {
                                                     content.push('\n');
                                                 }
-                                                let truncated: String = thinking.chars().take(100).collect();
-                                                content.push_str(&format!("[Thinking: {}...]", truncated));
+                                                let truncated: String =
+                                                    thinking.chars().take(100).collect();
+                                                content.push_str(&format!(
+                                                    "[Thinking: {truncated}...]"
+                                                ));
                                             }
                                         }
                                         "tool_use" => {
-                                            let tool_name = block.get("name")
+                                            let tool_name = block
+                                                .get("name")
                                                 .and_then(|n| n.as_str())
                                                 .unwrap_or("unknown")
                                                 .to_string();
 
                                             // Extract file_path from Edit/Write tool inputs
-                                            let file_path = if tool_name == "Edit" || tool_name == "Write" {
-                                                block.get("input")
-                                                    .and_then(|i| i.get("file_path"))
-                                                    .and_then(|p| p.as_str())
-                                                    .map(|s| s.to_string())
-                                            } else {
-                                                None
-                                            };
+                                            let file_path =
+                                                if tool_name == "Edit" || tool_name == "Write" {
+                                                    block
+                                                        .get("input")
+                                                        .and_then(|i| i.get("file_path"))
+                                                        .and_then(|p| p.as_str())
+                                                        .map(|s| s.to_string())
+                                                } else {
+                                                    None
+                                                };
 
                                             tool_calls.push(ToolCall {
                                                 tool_name,
@@ -283,7 +307,8 @@ impl ClaudeData {
                                 }
                             }
 
-                            let timestamp = json.get("timestamp")
+                            let timestamp = json
+                                .get("timestamp")
                                 .and_then(|t| t.as_str())
                                 .and_then(|s| DateTime::parse_from_rfc3339(s).ok())
                                 .map(|dt| dt.with_timezone(&Utc));
@@ -356,7 +381,9 @@ impl ClaudeData {
 
                 // Check for state file first (written by Claude hooks)
                 // Then fall back to file modification time
-                let state_file = claude_dir.join("session-state").join(format!("{}.state", &session_id));
+                let state_file = claude_dir
+                    .join("session-state")
+                    .join(format!("{}.state", &session_id));
                 let status = if state_file.exists() {
                     // Read state from hook-written file
                     std::fs::read_to_string(&state_file)
@@ -369,10 +396,15 @@ impl ClaudeData {
                     // idle = 2-30 min (waiting)
                     // inactive = > 30 min (old)
                     let age = chrono::Utc::now().signed_duration_since(*mod_time);
-                    if age.num_seconds() < 10 { "working".to_string() }
-                    else if age.num_seconds() < 120 { "active".to_string() }
-                    else if age.num_minutes() < 30 { "idle".to_string() }
-                    else { "inactive".to_string() }
+                    if age.num_seconds() < 10 {
+                        "working".to_string()
+                    } else if age.num_seconds() < 120 {
+                        "active".to_string()
+                    } else if age.num_minutes() < 30 {
+                        "idle".to_string()
+                    } else {
+                        "inactive".to_string()
+                    }
                 } else {
                     "inactive".to_string()
                 };
@@ -380,7 +412,11 @@ impl ClaudeData {
                 sessions.push(Session {
                     id: session_id,
                     project: project_name.clone(),
-                    project_name: project_name.split('/').last().unwrap_or(&project_name).to_string(),
+                    project_name: project_name
+                        .split('/')
+                        .last()
+                        .unwrap_or(&project_name)
+                        .to_string(),
                     description: None, // Will be populated from history.jsonl
                     custom_name: None,
                     started_at: modified,
@@ -423,7 +459,10 @@ impl ClaudeData {
                 continue;
             }
 
-            let parts: Vec<&str> = filename.trim_end_matches(".json").split("-agent-").collect();
+            let parts: Vec<&str> = filename
+                .trim_end_matches(".json")
+                .split("-agent-")
+                .collect();
             if parts.len() != 2 {
                 continue;
             }
@@ -440,17 +479,27 @@ impl ClaudeData {
             let content = fs::read_to_string(&path).await.unwrap_or_default();
             let todo_values: Vec<Value> = serde_json::from_str(&content).unwrap_or_default();
 
-            let todos: Vec<TodoItem> = todo_values.iter().map(|v| {
-                TodoItem {
-                    id: v.get("id").and_then(|i| i.as_str()).unwrap_or("").to_string(),
-                    content: v.get("subject")
+            let todos: Vec<TodoItem> = todo_values
+                .iter()
+                .map(|v| TodoItem {
+                    id: v
+                        .get("id")
+                        .and_then(|i| i.as_str())
+                        .unwrap_or("")
+                        .to_string(),
+                    content: v
+                        .get("subject")
                         .or_else(|| v.get("content"))
                         .and_then(|c| c.as_str())
                         .unwrap_or("")
                         .to_string(),
-                    status: v.get("status").and_then(|s| s.as_str()).unwrap_or("pending").to_string(),
-                }
-            }).collect();
+                    status: v
+                        .get("status")
+                        .and_then(|s| s.as_str())
+                        .unwrap_or("pending")
+                        .to_string(),
+                })
+                .collect();
 
             let has_active = todos.iter().any(|t| t.status == "in_progress");
             let has_todos = !todos.is_empty();
@@ -460,7 +509,14 @@ impl ClaudeData {
                 session_id,
                 parent_id: None,
                 agent_type: "main".to_string(),
-                status: if has_active { "running" } else if has_todos { "active" } else { "idle" }.to_string(),
+                status: if has_active {
+                    "running"
+                } else if has_todos {
+                    "active"
+                } else {
+                    "idle"
+                }
+                .to_string(),
                 started_at: None,
                 description: format!("Agent {}", agent_id.chars().take(8).collect::<String>()),
                 children: Vec::new(),
@@ -480,5 +536,4 @@ impl ClaudeData {
 
         Ok(agents)
     }
-
 }
