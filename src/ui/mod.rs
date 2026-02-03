@@ -265,6 +265,7 @@ fn draw_files_list_inner(f: &mut Frame, app: &App, files: &[&crate::data::FileCh
     use crate::data::FileStatus;
 
     let mut lines: Vec<Line> = Vec::new();
+    let mut selected_line: usize = 0;
 
     if app.file_tree_mode {
         // Tree view: group files by directory
@@ -290,6 +291,9 @@ fn draw_files_list_inner(f: &mut Frame, app: &App, files: &[&crate::data::FileCh
             }
 
             let is_selected = is_focused && *idx == app.selected_file_idx;
+            if is_selected {
+                selected_line = lines.len();
+            }
             let (icon, status_color) = match file.status {
                 FileStatus::Modified => ("M", Color::Yellow),
                 FileStatus::Added => ("A", Color::Green),
@@ -329,6 +333,9 @@ fn draw_files_list_inner(f: &mut Frame, app: &App, files: &[&crate::data::FileCh
         // Flat view: simple list of filenames
         for (idx, file) in files.iter().enumerate() {
             let is_selected = is_focused && idx == app.selected_file_idx;
+            if is_selected {
+                selected_line = lines.len();
+            }
             let (icon, status_color) = match file.status {
                 FileStatus::Modified => ("M", Color::Yellow),
                 FileStatus::Added => ("A", Color::Green),
@@ -364,7 +371,15 @@ fn draw_files_list_inner(f: &mut Frame, app: &App, files: &[&crate::data::FileCh
         }
     }
 
-    let paragraph = Paragraph::new(lines);
+    // Calculate scroll to keep selected item visible
+    let visible_height = inner.height as usize;
+    let scroll = if selected_line >= visible_height {
+        (selected_line - visible_height + 1) as u16
+    } else {
+        0
+    };
+
+    let paragraph = Paragraph::new(lines).scroll((scroll, 0));
     f.render_widget(paragraph, inner);
 }
 

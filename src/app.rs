@@ -458,6 +458,7 @@ impl App {
     }
 
     /// Scan .omc directory for important project state files
+    /// Excludes: sessions, checkpoints, state directories
     async fn scan_omc_directory() -> Result<Vec<String>> {
         let mut files = Vec::new();
         let omc_path = std::path::Path::new(".omc");
@@ -466,6 +467,9 @@ impl App {
             return Ok(files);
         }
 
+        // Directories to skip
+        const SKIP_DIRS: &[&str] = &["sessions", "checkpoints", "state"];
+
         // Recursively walk .omc directory
         fn visit_dir(dir: &std::path::Path, files: &mut Vec<String>) -> std::io::Result<()> {
             if dir.is_dir() {
@@ -473,6 +477,12 @@ impl App {
                     let entry = entry?;
                     let path = entry.path();
                     if path.is_dir() {
+                        // Skip excluded directories
+                        if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
+                            if SKIP_DIRS.contains(&name) {
+                                continue;
+                            }
+                        }
                         visit_dir(&path, files)?;
                     } else {
                         if let Some(path_str) = path.to_str() {
