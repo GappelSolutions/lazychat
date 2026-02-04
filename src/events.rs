@@ -167,6 +167,7 @@ async fn handle_key(app: &mut App, key: KeyEvent) -> Result<bool> {
         KeyCode::Tab | KeyCode::BackTab => app.toggle_focus(),
 
         // h = go UP in left sidebar, or previous hunk in diff mode
+        // Sidebar order: Presets -> Sessions -> Files -> Todos
         KeyCode::Char('h') => match app.focus {
             Focus::Detail if app.diff_mode => {
                 app.jump_to_prev_hunk();
@@ -179,6 +180,10 @@ async fn handle_key(app: &mut App, key: KeyEvent) -> Result<bool> {
             Focus::Files => {
                 app.focus = Focus::Sessions;
                 app.diff_mode = false;
+            }
+            Focus::Sessions => {
+                // Navigate up to Presets panel
+                app.focus = Focus::Presets;
             }
             _ => {}
         },
