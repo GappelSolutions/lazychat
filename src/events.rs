@@ -289,7 +289,10 @@ async fn handle_key(app: &mut App, key: KeyEvent) -> Result<bool> {
         // Enter = fullscreen detail view (from any left panel)
         KeyCode::Enter => match app.focus {
             Focus::Presets => {
-                // TODO: Launch preset instances
+                // Spawn instances from selected preset
+                if let Err(e) = app.spawn_preset() {
+                    app.set_error(&format!("Failed to spawn preset: {e}"));
+                }
             }
             Focus::Files => {
                 app.focus = Focus::Detail;

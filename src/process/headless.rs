@@ -40,7 +40,7 @@ pub struct HeadlessTerminal {
 
 impl HeadlessTerminal {
     /// Spawn a new headless Claude instance
-    pub fn spawn(cwd: &str, add_dirs: Vec<String>, preset_name: Option<&str>) -> Result<Self> {
+    pub fn spawn(cwd: &str, add_dirs: Vec<String>, extra_args: Vec<String>) -> Result<Self> {
         // Generate a unique session ID for this headless instance
         let session_id = Uuid::new_v4().to_string();
 
@@ -48,9 +48,6 @@ impl HeadlessTerminal {
         validate_path(cwd)?;
         for dir in &add_dirs {
             validate_path(dir)?;
-        }
-        if let Some(preset) = preset_name {
-            validate_preset_name(preset)?;
         }
 
         // Build the claude command
@@ -61,12 +58,12 @@ impl HeadlessTerminal {
 
         // Add additional directories if specified
         for dir in &add_dirs {
-            cmd.arg("--add").arg(dir);
+            cmd.arg("--add-dir").arg(dir);
         }
 
-        // Add preset if specified
-        if let Some(preset) = preset_name {
-            cmd.arg("--preset").arg(preset);
+        // Add extra arguments from preset (e.g., --dangerously-skip-permissions)
+        for arg in &extra_args {
+            cmd.arg(arg);
         }
 
         // Set session ID for resumability

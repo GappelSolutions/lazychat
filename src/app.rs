@@ -658,7 +658,7 @@ impl App {
             match crate::process::headless::HeadlessTerminal::spawn(
                 &preset.cwd,
                 preset.add_dirs.clone(),
-                Some(&preset.name),
+                preset.extra_args.clone(),
             ) {
                 Ok(terminal) => {
                     let pid = terminal.pid();
